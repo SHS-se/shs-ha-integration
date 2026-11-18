@@ -807,6 +807,7 @@ class AppEngine:
             for environment, h in self.households.items():
                 operations = [('planning','upload',lambda h=h:self.planning(h)),
                     ('cloud_refresh','cloud_status',lambda h=h:self.periodic(h.async_request_refresh,60)),
+                    ('room_observations','room_observations',lambda h=h:self.periodic(h.async_room_observations,60)),
                     ('input_accuracy','cloud_status',lambda h=h:self.periodic(h.async_report_input_accuracy,60)),
                     ('replan_listener','notifications',h.async_replan_listener),('planning_delivery','delivery',h.async_planning_delivery)]
                 for name, stage, operation in operations:

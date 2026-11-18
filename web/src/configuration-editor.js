@@ -29,6 +29,15 @@ function activeDeviceMapping(fields, controlType, draft) {
 const FRONTEND_VERSION = "app-configuration-v1";
 const PANEL_ELEMENT = "shs-configuration-editor";
 
+function newRequestId() {
+  // getRandomValues is also available to Home Assistant served over local HTTP.
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 class ShsEnergyConfigPanel extends HTMLElement {
   constructor() {
     super();
@@ -44,7 +53,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._category = "";
     this._scheduleSearch = this._scheduleRoom = this._scheduleCategory = this._scheduleMode = "";
     this._showExcluded = false;
-    this._expanded = new Set();
+    this._expanded = new Set(["room-connections"]);
     this._added = new Set();
     this._fullHorizon = false;
     this._selectedSlot = null;
@@ -53,6 +62,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._saving = false;
     this._savingDeviceKey = "";
     this._deviceErrors = {};
+    this._roomDrafts = new Map();
+    this._doorways = [];
     this._error = "";
     this._notice = "";
     this._entryId = new URLSearchParams(window.location.search).get("config_entry");
@@ -72,7 +83,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
   async _request(message) {
     const result = await this._backend.request({ ...message,
       expected_revision: message.expected_revision ?? this._data?.revision,
-      request_id: message.request_id ?? crypto.randomUUID() });
+      request_id: message.request_id ?? newRequestId() });
     if (result?.revision && ["save", "save_device"].includes(message.action) && this._data) {
       this._data.revision = result.revision;
     }
@@ -141,6 +152,36 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .filter(f => !owned.has(f.key) && !f.key.endsWith("_control_enabled"));
   }
 
+  _deviceMeterIds() {
+    return new Set((this._data.devices || []).filter(device => device.meter_room).map(device => device.statistic_id));
+  }
+
+  _isIndividualMeterField(key) {
+    return (this._data.device_categories || []).some(category => key === `entities_${category}`);
+  }
+
+  _energyValue(key, value, deviceMeters) {
+    return this._isIndividualMeterField(key) && Array.isArray(value)
+      ? value.filter(id => !deviceMeters.has(id)) : value;
+  }
+
+  _energySourceSections() {
+    return this._data.sections.filter(section => section.tab === "energy" && section.id !== "sharing");
+  }
+
+  _energySections(deviceMeters) {
+    const deviceCategories = new Set((this._data.devices || []).filter(device => device.meter_room).map(device => `entities_${device.category}`));
+    return this._energySourceSections().map(section => {
+      if (section.id !== "metering") return section;
+      const fields = section.fields.filter(({key}) => {
+        if (!this._isIndividualMeterField(key)) return true;
+        const meters = [this._savedDraft[key], this._draft[key]].flatMap(value => Array.isArray(value) ? value : []);
+        return meters.some(id => !deviceMeters.has(id)) || (!meters.length && !deviceCategories.has(key));
+      });
+      return {...section, fields, description: "Whole-home and standalone energy meters. Individual Energy Dashboard meters are listed under Devices."};
+    });
+  }
+
   _patch(fields) {
     return Object.fromEntries(fields.filter(f => JSON.stringify(this._draft[f.key]) !== JSON.stringify(this._savedDraft[f.key]))
       .map(f => [f.key, this._draft[f.key] ?? null]));
@@ -148,6 +189,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   get _dirty() {
     return JSON.stringify(this._draft) !== JSON.stringify(this._savedDraft)
+      || this._roomDrafts?.size > 0
       || [...(this._deviceDrafts?.keys() || [])].some(key => this._deviceDirty(key));
   }
 
@@ -163,6 +205,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return (section !== "planning" && Object.keys(this._deviceDrafts?.get(deviceKey)?.settings || {}).length > 0)
       || (section !== "planning" && JSON.stringify(this._draft?.[MAPPINGS_KEY]?.[deviceKey]) !== JSON.stringify(this._savedDraft?.[MAPPINGS_KEY]?.[deviceKey]))
       || Object.keys(this._patch(this._systemFields(device, section))).length > 0;
+  }
+
+  _deviceFormDirty(key, section) {
+    return this._deviceDirty(key, section) || (section !== "planning" && this._roomDrafts?.has(key));
   }
 
   _entityLabel(entityId) {
@@ -322,16 +368,22 @@ class ShsEnergyConfigPanel extends HTMLElement {
     if (progress) progress.innerHTML = this._refreshBanner();
     for (const button of this.shadowRoot.querySelectorAll("button[data-action]")) {
       const { action, deviceKey, section } = button.dataset;
+      if (action === "save" || action === "discard") button.hidden = this._tab !== "energy" && !this._configurationDirty;
       if (action === "save") button.disabled = !this._configurationDirty || this._refreshing || this._saving || Boolean(this._savingDeviceKey);
-      else if (action === "discard") button.disabled = !this._dirty;
-      else if (action === "refresh") button.disabled = this._loading || this._refreshing;
+      else if (action === "discard") button.disabled = !this._dirty || this._saving || Boolean(this._savingDeviceKey);
+      else if (action === "refresh" || action === "discover") button.disabled = this._loading || this._refreshing || this._saving || Boolean(this._savingDeviceKey);
       else if (action === "save-device" || action === "cancel-device") {
-        button.disabled = !this._deviceDirty(deviceKey, section) || (action === "save-device" && (this._refreshing || this._saving || Boolean(this._savingDeviceKey)));
-        button.closest(".device-save-row").querySelector("span").textContent = this._deviceDirty(deviceKey, section) ? "Unsaved changes" : "Saved";
+        const dirty = this._deviceFormDirty(deviceKey, section);
+        button.disabled = !dirty || this._saving || Boolean(this._savingDeviceKey)
+          || (action === "save-device" ? this._loading || this._refreshing : Boolean(this._deviceSaveRequests?.has(deviceKey)));
+        button.closest(".device-save-row").querySelector("span").textContent = dirty ? "Unsaved changes" : "Saved";
       }
     }
     for (const input of this.shadowRoot.querySelectorAll("[data-permission], [data-share]")) {
       input.disabled = Boolean(this._refreshing || this._saving || this._savingDeviceKey);
+    }
+    for (const input of this.shadowRoot.querySelectorAll("[data-room-editor] select, [data-room-editor] button")) {
+      input.disabled = this._roomEditBusy(input.dataset.deviceKey);
     }
     const status = this.shadowRoot.querySelector("footer span");
     if (status) status.textContent = this._dirty ? "Unsaved changes" : "All changes saved";
@@ -371,8 +423,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   async _saveDevice(deviceKey, section) {
+    const roomDraft = section !== "planning" && this._roomDrafts?.get(deviceKey);
+    const controlsDirty = this._deviceDirty(deviceKey, section);
     if (
-      !this._deviceDirty(deviceKey, section) ||
+      (!controlsDirty && !roomDraft) || this._loading ||
       this._savingDeviceKey ||
       this._refreshing || this._saving ||
       !this._entryId
@@ -383,6 +437,19 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._error = "";
     this._notice = "";
     this._render();
+    try {
+      if (controlsDirty && !(await this._saveDeviceConfiguration(deviceKey, section))) return;
+      if (roomDraft && !this._refreshing) await this._commitDeviceRoom(deviceKey, roomDraft, controlsDirty);
+    } finally {
+      this._savingDeviceKey = "";
+      this._render();
+      const first = this._deviceErrorTargets(deviceKey)[0];
+      if (first && first.scope !== "configuration") this._openField(first.token);
+      else if (roomDraft?.error) this._focusRoomSetting(deviceKey);
+    }
+  }
+
+  async _saveDeviceConfiguration(deviceKey, section) {
     const device = this._data.devices.find(d => d.key === deviceKey);
     const fields = this._systemFields(device, section);
     const draft = this._deviceDrafts?.get(deviceKey);
@@ -402,7 +469,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
       config_entry: this._entryId,
       device_key: deviceKey,
       expected_revision: draft?.revision ?? this._data.revision,
-      request_id: crypto.randomUUID(),
+      request_id: newRequestId(),
       configuration,
       ...(section === "planning" ? {} : {
         ...(draft && {settings: draft.settings}),
@@ -452,6 +519,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         : mapping
         ? `${device?.name || deviceKey} setup saved.`
         : `${device?.name || deviceKey} settings saved.`;
+      return true;
     } catch (error) {
       if (error?.code === "refresh_in_progress") this._refreshing = true;
       else {
@@ -464,11 +532,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
           if (error?.field_errors) (this._deviceFieldErrors ||= new Map()).set(deviceKey, error.field_errors);
         }
       }
-    } finally {
-      this._savingDeviceKey = "";
-      this._render();
-      const first = this._deviceErrorTargets(deviceKey)[0];
-      if (first && first.scope !== "configuration") this._openField(first.token);
+      return false;
     }
   }
 
@@ -483,7 +547,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         action: "discover",
         config_entry: this._entryId,
       });
-      const sources = this._data.sections.filter(s => s.tab === "energy" && s.id !== "sharing").flatMap(s => s.fields);
+      const sources = this._energySourceSections().flatMap(s => s.fields);
       for (const field of sources) {
         if (JSON.stringify(this._draft[field.key]) !== JSON.stringify(this._savedDraft[field.key])) continue;
         if (field.key in result.configuration) this._draft[field.key] = this._clone(result.configuration[field.key]);
@@ -503,6 +567,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _discard() {
     this._draft = this._clone(this._savedDraft);
+    this._roomDrafts?.clear();
     this._error = "";
     this._discovery = null;
     this._notice = "Changes discarded.";
@@ -582,7 +647,9 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _removeField(scope, key, deviceKey = "") {
     const target = scope === "mapping" ? this._mapping(deviceKey, true) : this._draft;
-    target[key] = null;
+    const deviceMeters = scope === "configuration" && this._isIndividualMeterField(key) ? this._deviceMeterIds() : null;
+    const retained = deviceMeters && Array.isArray(target[key]) ? target[key].filter(id => deviceMeters.has(id)) : [];
+    target[key] = retained.length ? retained : null;
     if (scope === "configuration" && key === "battery_mode_entity") {
       for (const mode of ["charge", "discharge", "idle", "baseline"]) {
         target[`battery_mode_${mode}`] = null;
@@ -597,6 +664,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _addMulti(scope, key, value, deviceKey) {
     const entityId = String(value || "").trim();
     if (!entityId) return;
+    if (scope === "configuration" && this._isIndividualMeterField(key) && this._deviceMeterIds().has(entityId)) {
+      this._notice = "This meter is already listed under Devices.";
+      this._render();
+      return;
+    }
     const target = scope === "mapping" ? this._mapping(deviceKey, true) : this._draft;
     const current = Array.isArray(target[key]) ? [...target[key]] : [];
     if (!current.includes(entityId)) current.push(entityId);
@@ -691,7 +763,29 @@ class ShsEnergyConfigPanel extends HTMLElement {
       const excluded = new Set(this._draft.excluded_device_readings || []);
       if (element.checked) excluded.delete(element.dataset.share); else excluded.add(element.dataset.share);
       this._draft.excluded_device_readings = [...excluded];
-      this._saveInclusion(); return;
+      this._selectedDevice = element.dataset.share;
+      this._saveInclusion(element.dataset.share); return;
+    }
+    if ("roomSetting" in element.dataset) {
+      const key = element.dataset.deviceKey;
+      const room = this._data.devices.find(device => device.key === key).meter_room;
+      if (element.value === room.area_id) this._roomDrafts.delete(key);
+      else this._roomDrafts.set(key, { areaId: element.value, meters: room.meters });
+      this._render();
+      return;
+    }
+    if (element.dataset.standaloneProbe !== undefined) {
+      const room = element.dataset.roomKey;
+      this._standaloneProbeDraft = {room, source: element.value, revision: this._data.revision};
+      this._standaloneProbeError = null;
+      this._render();
+      this.shadowRoot.querySelector("[data-standalone-probe]")?.focus();
+      return;
+    }
+    if (element.dataset.doorwayField && this._doorwayForm) {
+      this._doorwayForm[element.dataset.doorwayField] = element.value;
+      this._render();
+      return;
     }
     if (element.dataset.permission) {
       this._control(element.dataset.permission, element.value); return;
@@ -749,16 +843,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _onClick(event) {
     const button = event.target.closest("button");
     if (!button) {
-      if (event.target.closest(".workspace-card > summary")) event.preventDefault();
+      if (event.target.closest(".workspace-card > summary") && !event.target.closest(".device-inclusion")) event.preventDefault();
       return;
     }
     const action = button.dataset.action;
     if (!action) return;
-    if (action === "device-settings") {
-      event.preventDefault();
-      this._openDeviceSettings(button);
-      return;
-    }
     if (action === "review-device") this._reviewDevice(button.dataset.deviceKey);
     if (action === "pair-backend") this._backendAction("pair_backend", button.dataset.environment);
     if (action === "select-backend") this._backendAction("select_backend", button.dataset.environment);
@@ -786,10 +875,34 @@ class ShsEnergyConfigPanel extends HTMLElement {
       this.shadowRoot.querySelector(`[data-view="${this._deviceView}"]`)?.focus();
     }
     else if (action === "open-room") {
+      this._doorwayForm = null;
       this._selectedRoom = button.dataset.roomKey;
       this._tab = "rooms";
       this._render();
       this.shadowRoot.querySelector(".workspace-detail h2")?.focus();
+    }
+    else if (action === "save-room-probe") {
+      void this._saveRoomProbe(button.dataset.roomKey);
+    }
+    else if (action === "open-doorway-form") {
+      this._doorwayForm = { room: button.dataset.roomKey, connectedRoom: "" };
+      this._render();
+      this.shadowRoot.querySelector('[data-doorway-field="connectedRoom"]')?.focus();
+    }
+    else if (action === "add-doorway" || action === "cancel-doorway") {
+      if (action === "add-doorway") {
+        const {room, connectedRoom} = this._doorwayForm;
+        if (!this._availableDoorwayRooms(room).includes(connectedRoom)) return;
+        this._doorways.push({rooms: [room, connectedRoom]});
+      }
+      this._doorwayForm = null;
+      this._render();
+      this.shadowRoot.querySelector('[data-action="open-doorway-form"]:enabled, [data-action="remove-doorway"]')?.focus();
+    }
+    else if (action === "remove-doorway") {
+      this._doorways.splice(Number(button.dataset.index), 1);
+      this._render();
+      this.shadowRoot.querySelector('[data-action="open-doorway-form"]')?.focus();
     }
     else if (action === "add-field") { this._added.add(button.dataset.token); this._render(); }
     else if (action === "remove-field") this._removeField(button.dataset.scope, button.dataset.fieldKey, button.dataset.deviceKey);
@@ -889,8 +1002,12 @@ class ShsEnergyConfigPanel extends HTMLElement {
       for (const section of ["controls", "planning"]) for (const field of this._systemFields(device, section)) add(field, "configuration", device.key, "devices", section + ":" + device.key, this._deviceTitle(device, section));
     }
     const owned = new Set(locations.filter(l => l.scope === "configuration").map(l => l.field.key));
-    for (const section of this._data?.sections || []) for (const field of section.fields) {
-      if (!owned.has(field.key)) add(field, "configuration", "", section.id === "electrical_limits" ? "schedule" : section.tab, "section:" + section.id);
+    const metering = this._data?.sections && this._energySections(this._deviceMeterIds()).find(section => section.id === "metering");
+    for (const section of this._data?.sections || []) {
+      const fields = section.id === "metering" && metering ? metering.fields : section.fields;
+      for (const field of fields) {
+        if (!owned.has(field.key)) add(field, "configuration", "", section.id === "electrical_limits" ? "schedule" : section.tab, "section:" + section.id);
+      }
     }
     return locations;
   }
@@ -898,9 +1015,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _fieldTargets(item) {
     const fix = item.fix || {};
     const configuration = this._data.configuration || this._savedDraft || {};
+    const deviceMeters = this._deviceMeterIds();
     return this._fieldLocations().flatMap(location => {
       const match = fix.fields?.find(target => target.key === location.field.key && (target.scope || "configuration") === location.scope && (!target.device_key || target.device_key === location.deviceKey));
-      const value = location.scope === "mapping" ? configuration.device_control_mappings?.[location.deviceKey]?.[location.field.key] : configuration[location.field.key];
+      const value = location.scope === "mapping" ? configuration.device_control_mappings?.[location.deviceKey]?.[location.field.key]
+        : this._energyValue(location.field.key, configuration[location.field.key], deviceMeters);
       const entityMatches = fix.kind === "entity" && fix.entity_id && (value === fix.entity_id || (Array.isArray(value) && value.includes(fix.entity_id)));
       return match || entityMatches ? [{ ...location, message: match?.message || item.items?.join("; ") || item.detail, issue: item }] : [];
     });
@@ -1082,71 +1201,35 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   _canPoll() {
     return this._entryId && !this._loading && !this._saving && !this._savingDeviceKey
-      && !this._replanning && !this._deviceSettingsDialog && !document.hidden;
+      && !this._replanning && !document.hidden;
   }
 
-  _openDeviceSettings(button) {
-    if (this._deviceSettingsDialog || this._saving || this._savingDeviceKey) return;
-    const device = this._data.devices.find(row => row.key === button.dataset.deviceKey);
-    const room = device.meter_room;
-    const areas = Object.entries(this._data.rooms || {}).sort((a, b) => a[1].localeCompare(b[1]));
-    const dialog = document.createElement("dialog");
-    dialog.className = "device-settings-dialog";
-    dialog.setAttribute("aria-labelledby", "device-settings-title");
-    dialog.innerHTML = `
-      <h2 id="device-settings-title">Room for ${this._escape(device.name)}</h2>
-      <form>
-        ${room.editable && areas.length ? `<label>Room<select name="room">
-          <option value="" disabled ${room.area_id ? "" : "selected"}>Choose a room</option>
-          ${areas.map(([id, name]) => `<option value="${this._escape(id)}" ${id === room.area_id ? "selected" : ""}>${this._escape(name)}</option>`).join("")}
-          </select></label><small>${room.different_areas ? "The meters currently have different room assignments." : "Assigns this device’s meters to a room in Home Assistant."}</small>`
-          : `<p>${room.editable ? "Create a room in Home Assistant to assign this device." : "Each configured meter needs a Home Assistant entity before its room can be assigned."}</p>`}
-        <p id="device-settings-error" role="alert" class="inline-error" hidden></p>
-        <div class="device-settings-actions">
-          <button type="button" class="text">Cancel</button>
-          <button type="submit" class="primary" disabled>Save room</button>
-        </div>
-      </form>`;
-    const form = dialog.querySelector("form");
-    const cancel = form.querySelector('button[type="button"]');
-    const save = form.querySelector('button[type="submit"]');
-    const error = form.querySelector('[role="alert"]');
-    const area = form.elements.namedItem("room");
-    form.addEventListener("change", () => { save.disabled = !area?.value || area.value === room.area_id; });
-    cancel.addEventListener("click", () => dialog.close());
-    dialog.addEventListener("cancel", event => { if (cancel.disabled) event.preventDefault(); });
-    dialog.addEventListener("close", () => {
-      this._deviceSettingsDialog = null;
-      dialog.remove();
-      const current = this._data.devices.find(row => row.key === device.key);
-      if (current && this._room && this._room !== current.room_name) this._room = "";
-      this._render();
-      this.shadowRoot.querySelector(`[data-action="device-settings"][data-device-key="${CSS.escape(device.key)}"]`)?.focus();
-    });
-    form.addEventListener("submit", async event => {
-      event.preventDefault();
-      if (save.disabled) return;
-      const areaId = area.value;
-      area.disabled = cancel.disabled = save.disabled = true;
-      try {
-        const result = await this._request({action: "device_room", config_entry: this._entryId,
-          device_key: device.key, meters: room.meters, area_id: areaId});
-        this._pollRevision = (this._pollRevision || 0) + 1;
-        this._mergePanel(result);
-        dialog.close();
-      } catch (err) {
-        error.textContent = this._errorMessage(err);
-        error.hidden = false;
-        area.setAttribute("aria-invalid", "true");
-        area.setAttribute("aria-describedby", error.id);
-        area.disabled = cancel.disabled = save.disabled = false;
-        area.focus();
+  _roomEditBusy(key) {
+    return Boolean(this._loading || this._refreshing || this._saving || this._savingDeviceKey || this._deviceSaveRequests?.has(key));
+  }
+
+  _focusRoomSetting(key) {
+    this.shadowRoot.querySelector(`[data-room-setting][data-device-key="${CSS.escape(key)}"]`)?.focus();
+  }
+
+  async _commitDeviceRoom(key, draft, controlsSaved) {
+    delete draft.error;
+    this._render();
+    try {
+      const result = await this._request({action: "device_room", config_entry: this._entryId,
+        device_key: key, meters: draft.meters, area_id: draft.areaId});
+      this._mergePanel(result);
+      this._roomDrafts.delete(key);
+      const current = result.devices.find(device => device.key === key);
+      if (this._selectedDevice === key && this._room && current && this._room !== current.room_name) this._room = "";
+      this._notice = `${current?.name || key} settings saved.`;
+    } catch (error) {
+      if (error?.code === "refresh_in_progress") this._refreshing = true;
+      else {
+        this._notice = "";
+        draft.error = (controlsSaved ? "Other device settings were saved. " : "") + this._errorMessage(error);
       }
-    });
-    this._inspectedEntity = null;
-    this._deviceSettingsDialog = dialog;
-    this.shadowRoot.append(dialog);
-    dialog.showModal();
+    }
   }
 
   async _reviewDevice(key) {
@@ -1235,8 +1318,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _cancelDevice(key, section) {
-    if (this._deviceSaveRequests?.has(key)) return;
-    if (section !== "planning") this._deviceDrafts?.delete(key);
+    if (this._deviceSaveRequests?.has(key) || this._saving || this._savingDeviceKey) return;
+    if (section !== "planning") {
+      this._deviceDrafts?.delete(key);
+      this._roomDrafts?.delete(key);
+    }
     this._deviceConflicts?.delete(key);
     if (section !== "planning" && this._draft[MAPPINGS_KEY]) this._draft[MAPPINGS_KEY][key] = this._clone(this._savedDraft[MAPPINGS_KEY]?.[key]);
     for (const field of this._systemFields(this._data.devices.find(d => d.key === key), section)) {
@@ -1309,10 +1395,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return `<div class="field-grid">${visible.join("")}</div>${optional.length ? `<details class="compact" data-open-key="optional:${this._escape(scope + deviceKey + fields[0]?.key)}"><summary>Add a setting</summary>${optional.join("")}</details>` : ""}`;
   }
 
-  _renderSection(section) {
+  _renderSection(section, values = this._draft) {
     const fields = section.fields;
-    const summary = fields.filter(f => this._present(this._draft[f.key])).map(f => {
-      const value = this._draft[f.key];
+    const summary = fields.filter(f => this._present(values[f.key])).map(f => {
+      const value = values[f.key];
       return Array.isArray(value) ? `${f.label}: ${value.length}` : f.label;
     }).join(" · ") || "No settings configured";
     const issueCount = fields.filter(f => this._fieldProblems(f.key).length).length;
@@ -1320,42 +1406,74 @@ class ShsEnergyConfigPanel extends HTMLElement {
     return `<details class="card compact" data-open-key="${id}" ${this._expanded.has(id) ? "open" : ""}>
       <summary>${this._escape(section.title)}<span class="badge warning" data-field-count ${issueCount ? "" : "hidden"}>${issueCount} field${issueCount === 1 ? "" : "s"} need${issueCount === 1 ? "s" : ""} attention</span><span>${this._escape(summary)}</span></summary>
       ${section.description ? `<p class="description">${this._escape(section.description)}</p>` : ""}
-      ${this._fields(fields, this._draft)}
+      ${this._fields(fields, values)}
     </details>`;
   }
 
   _renderEnergy() {
-    const sections = this._data.sections.filter(s => s.tab === "energy" && s.id !== "sharing");
-    const changes = this._patch(sections.flatMap(s => s.fields));
+    const deviceMeters = this._deviceMeterIds();
+    const sections = this._energySections(deviceMeters);
+    const values = Object.fromEntries(sections.flatMap(s => s.fields).map(({key}) => [key, this._energyValue(key, this._draft[key], deviceMeters)]));
     const selected = sections.flatMap(s => s.fields).flatMap(field => {
-      const value = this._draft[field.key];
+      const value = values[field.key];
       return (Array.isArray(value) ? value : typeof value === "string" && value.includes(".") ? [value] : [])
         .map(id => ({ field, id, entity: this._data.entities.find(e => e.entity_id === id) }));
     });
     return `<div class="page-intro"><h2>Energy shared with SHS</h2><p>Daily energy totals, completed 15-minute readings, device profiles and room temperatures help SHS predict demand. Devices remain counted within the household total.</p></div>
-      ${this._discovery ? `<section class="card"><h2>Review proposed source changes</h2>${Object.keys(changes).length ? `<ul>${Object.entries(changes).map(([key, value]) => {
-        const field = sections.flatMap(s => s.fields).find(f => f.key === key);
-        return `<li><strong>${this._escape(field?.label || "Source")}</strong>: ${this._escape(JSON.stringify(this._savedDraft[key] ?? []))} → ${this._escape(JSON.stringify(value))}</li>`;
-      }).join("")}</ul>` : "No source changes proposed."}<p>Save changes to apply, or Cancel to retain your current sources.</p></section>` : ""}
-      ${sections.map(s => this._renderSection(s)).join("")}
+      ${this._discovery ? this._renderSourceReview(deviceMeters) : ""}
+      ${sections.map(s => this._renderSection(s, values)).join("")}
       <p class="muted">Planning weather and location use the installation address saved on the SHS website.</p>
       <details class="card compact"><summary>Current readings · ${selected.length} selected sources</summary><div class="table-wrap"><table><thead><tr><th>Source</th><th>Used for</th><th>Reading</th><th>Last update</th><th>Selected in</th></tr></thead><tbody>${selected.map(({ field, entity, id }) => `<tr><td>${this._escape(entity?.name || id)}</td><td>${this._escape(field.label)}</td><td>${this._escape(entity ? `${entity.state} ${entity.unit || ""}` : "Unavailable")}</td><td>${this._time(entity?.last_updated)}</td><td>${this._data.configured_keys?.includes(field.key) ? "SHS configuration" : "HA Energy / discovery"}</td></tr>`).join("")}</tbody></table></div></details>`;
   }
 
-  async _saveInclusion() {
+  _renderSourceReview(deviceMeters) {
+    const fields = this._energySourceSections().flatMap(s => s.fields);
+    const changes = this._patch(fields);
+    const rows = fields.filter(({key}) => key in changes).map(({key, label}) => {
+      const before = this._savedDraft[key] ?? [];
+      const after = changes[key];
+      const oldVisible = JSON.stringify(this._energyValue(key, before, deviceMeters));
+      const newVisible = JSON.stringify(this._energyValue(key, after ?? [], deviceMeters));
+      const details = [];
+      if (oldVisible !== newVisible) details.push(`${oldVisible} → ${newVisible}`);
+      if (this._isIndividualMeterField(key)) {
+        const oldMeters = Array.isArray(before) ? before : [];
+        const newMeters = Array.isArray(after) ? after : [];
+        const added = newMeters.filter(id => deviceMeters.has(id) && !oldMeters.includes(id)).length;
+        const removed = oldMeters.filter(id => deviceMeters.has(id) && !newMeters.includes(id)).length;
+        if (added || removed) details.push(`Device meters added: ${added}, removed: ${removed}`);
+      }
+      if (!details.length) return "";
+      return `<li><strong>${this._escape(label)}</strong> · ${this._escape(details.join(" · "))}</li>`;
+    }).filter(Boolean);
+    return `<section class="card"><h2>Review proposed source changes</h2>${rows.length ? `<ul>${rows.join("")}</ul>` : "No source changes proposed."}<p>Save changes to apply, or Discard to retain your current sources.</p></section>`;
+  }
+
+  async _saveInclusion(key) {
     if (this._refreshing || this._saving || this._savingDeviceKey) return;
     const excluded = [...this._draft.excluded_device_readings];
-    this._saving = true; this._render();
+    this._pollRevision = (this._pollRevision || 0) + 1;
+    this._saving = true;
+    this._error = "";
+    this._notice = "";
+    this._render();
     try {
       await this._request({ action: "save", config_entry: this._entryId,
         configuration: { excluded_device_readings: excluded } });
       this._savedDraft.excluded_device_readings = excluded;
+      if (excluded.includes(key)) this._showExcluded = true;
       await this._load(false);
     } catch (error) {
       if (error?.code === "refresh_in_progress") this._refreshing = true;
       else { this._refreshing = false; this._error = this._errorMessage(error); }
       this._draft.excluded_device_readings = [...(this._savedDraft.excluded_device_readings || [])];
-    } finally { this._saving = false; this._render(); }
+    } finally {
+      this._saving = false;
+      this._render();
+      if (key && this._tab === "devices" && this._selectedDevice === key) {
+        this.shadowRoot.querySelector(`[data-share="${CSS.escape(key)}"]`)?.focus();
+      }
+    }
   }
 
   _choices(device, section = "schedule") {
@@ -1380,7 +1498,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const proposed = this._proposedDevice(device);
     const choices = [this._data.device_categories, this._data.device_control_types, this._data.device_load_types];
     const pending = this._deviceSaveRequests?.has(device.key) || this._savingDeviceKey === device.key;
-    return `<div class="field-grid">${DEVICE_SETTINGS.map(([key, label], index) => {
+    return `<div class="field-grid">${this._renderDeviceRoom(device)}${DEVICE_SETTINGS.map(([key, label], index) => {
       const token = `device-setting:${device.key}:${key}`;
       const problems = this._fieldProblems(key, "device-setting", device.key);
       const issueId = "field-issue-" + encodeURIComponent(token);
@@ -1394,11 +1512,38 @@ class ShsEnergyConfigPanel extends HTMLElement {
     }).join("")}</div>${this._data.device_setups_ready ? "" : "<p>Waiting for the website to transfer your existing device settings.</p>"}`;
   }
 
+  _renderDeviceRoom(device) {
+    const room = device.meter_room;
+    const areas = Object.entries(this._data.rooms || {}).sort((a, b) => a[1].localeCompare(b[1]));
+    if (!room.editable || !areas.length) {
+      const reason = room.editable ? "Create a room in Home Assistant to assign this device."
+        : "Each configured meter needs a Home Assistant entity before its room can be assigned.";
+      return `<div class="field"><span>Room</span><span>${this._escape(device.room_name || "No room")}</span><small class="field-help">${reason}</small></div>`;
+    }
+    const draft = this._roomDrafts?.get(device.key);
+    const selected = draft?.areaId || room.area_id;
+    const disabled = this._roomEditBusy(device.key) ? "disabled" : "";
+    const key = this._escape(device.key);
+    const id = "device-room-" + encodeURIComponent(device.key);
+    const help = room.different_areas ? "The meters currently have different room assignments."
+      : "Assigns this device’s meters to a room in Home Assistant.";
+    return `<div class="field${draft?.error ? " field-problem" : ""}" data-room-editor>
+      <label for="${id}">Room</label>
+      <select id="${id}" data-room-setting data-field-key="meter-room" data-device-key="${key}" ${disabled}
+        aria-describedby="${id}-help${draft?.error ? ` ${id}-error` : ""}" ${draft?.error ? 'aria-invalid="true"' : ""}>
+        <option value="" disabled ${selected ? "" : "selected"}>Choose a room</option>
+        ${areas.map(([areaId, name]) => `<option value="${this._escape(areaId)}" ${areaId === selected ? "selected" : ""}>${this._escape(name)}</option>`).join("")}
+      </select>
+      <small class="field-help" id="${id}-help">${help}</small>
+      ${draft?.error ? `<span id="${id}-error" role="alert" class="field-problems">${this._escape(draft.error)}</span>` : ""}
+    </div>`;
+  }
+
   _renderDevice(device, section = "controls", workspace = false) {
     const planning = section === "planning";
     const included = !(this._draft.excluded_device_readings || []).includes(device.key);
     const mapping = this._mapping(device.key) || {};
-    const dirty = this._deviceDirty(device.key, section);
+    const dirty = this._deviceFormDirty(device.key, section);
     const id = section + ":" + device.key;
     const edit = workspace || this._expanded.has(id) || dirty;
     const systemFields = this._systemFields(device, section);
@@ -1410,18 +1555,19 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const retrying = this._deviceSaveRequests?.has(device.key);
     const issueCount = mappingFields.filter(f => this._fieldProblems(f.key, "mapping", device.key).length).length + systemFields.filter(f => this._fieldProblems(f.key, "configuration", device.key).length).length;
     const title = this._deviceTitle(device, section);
+    const inclusionHelp = "device-inclusion-" + encodeURIComponent(device.key);
     const members = this._data.devices.filter(d => d.key === device.key || (device.system && d.planning_system === device.system));
     const description = planning
       ? "Model properties and planning participation"
       : `${device.room_name || "No room"} · ${this._label(device.category)}`;
     return `<details class="card device-card ${workspace ? "workspace-card" : ""}" data-open-key="${this._escape(id)}" ${edit ? "open" : ""}>
       <summary ${workspace ? 'tabindex="-1"' : ""}><div><strong>${this._escape(title)}</strong><small>${this._escape(description)}</small></div>
-        <div class="device-header-actions"><span class="badge warning" data-field-count ${issueCount ? "" : "hidden"}>${issueCount} field${issueCount === 1 ? "" : "s"} need${issueCount === 1 ? "s" : ""} attention</span><span data-setup-status ${issueCount ? "hidden" : ""}>${planning ? `<span class="badge">${device.planned ? "Planned" : device.included ? "Monitoring" : "Excluded"}</span>` : this._statusBadge(device.included ? device.mapping_status : "base_load", device.included && device.mapping_status === "ready" ? "Controls configured" : undefined)}</span>
-        ${!planning && device.meter_room ? `<button type="button" class="icon-button device-settings-button" data-action="device-settings" data-device-key="${this._escape(device.key)}" title="Assign room" aria-haspopup="dialog" aria-label="Room for ${this._escape(device.name)}"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.4 13a7.7 7.7 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-1.8-1L15 3h-4l-.4 3a7.4 7.4 0 0 0-1.8 1l-2.4-1-2 3.4 2 1.6a7.7 7.7 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 1.8 1l.4 3h4l.4-3a7.4 7.4 0 0 0 1.8-1l2.4 1 2-3.4zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg></button>` : ""}</div></summary>
+        <div class="device-header-actions"><span class="badge warning" data-field-count ${issueCount ? "" : "hidden"}>${issueCount} field${issueCount === 1 ? "" : "s"} need${issueCount === 1 ? "" : "s"} attention</span>
+        ${planning || included ? `<span data-setup-status ${issueCount ? "hidden" : ""}>${planning ? `<span class="badge">${device.planned ? "Planned" : device.included ? "Monitoring" : "Excluded"}</span>` : this._statusBadge(device.mapping_status, device.mapping_status === "ready" ? "Controls configured" : undefined)}</span>` : ""}
+        ${!planning ? `<label class="switch device-inclusion"><strong>${included ? "Included" : "Excluded"}</strong><input type="checkbox" role="switch" aria-label="Include ${this._escape(device.name)}" aria-describedby="${inclusionHelp}" data-share="${this._escape(device.key)}" ${this._refreshing || this._saving || this._savingDeviceKey ? "disabled" : ""} ${included ? "checked" : ""}><span aria-hidden="true"></span></label>` : ""}</div></summary>
       <div class="device-body">
         ${workspace && !planning && device.permission ? this._choices(device, "schedule") : ""}
-        ${!planning ? `<div class="choice-row"><span>${included ? "Included" : "Excluded"}</span><label class="switch"><input type="checkbox" aria-label="Include ${this._escape(device.name)}" data-share="${this._escape(device.key)}" ${this._refreshing || this._saving || this._savingDeviceKey ? "disabled" : ""} ${included ? "checked" : ""}><span></span></label></div>
-        <p class="muted">${included ? "Shares device data with SHS and allows planning and control when configured." : "Sends no individual readings, profiles or metadata to SHS and cannot be planned or controlled. Consumption stays in household totals."}</p>` : ""}
+        ${!planning ? `<p class="muted" id="${inclusionHelp}">${included ? "Shares device data with SHS and allows planning and control when configured." : "Sends no individual readings, profiles or metadata to SHS and cannot be planned or controlled. Consumption stays in household totals."}</p>` : ""}
         ${planning ? `<p>Connected equipment: ${members.map(d => this._escape(d.name)).join(", ")}</p>` : mappingFields.length ? `<p>${this._escape(device.name)} · ${this._escape(this._label(device.control_type))}</p>` : ""}
         ${!planning && device.system === "battery" ? this._fieldButtons(this._attention().filter(item => item.key === "battery_control").flatMap(item => this._fieldTargets(item))) : ""}
         ${!planning && device.mapping_error ? `<p class="inline-warning">${this._escape(device.mapping_error)}</p>` : ""}
@@ -1436,8 +1582,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         ])}
         </fieldset>
         ${!planning && !retrying && !dirty && Object.keys(device.suggested_mapping || {}).some(k => k !== "control_type" && !this._present(mapping[k])) ? `<button class="text" data-action="use-suggestions" data-device-key="${this._escape(device.key)}">Review suggested setup</button>` : ""}
-        ${selectors || mappingFields.length || systemFields.length ? `<div class="device-save-row"><span>${dirty ? "Unsaved changes" : "Saved"}</span><button class="text" data-action="cancel-device" data-section="${section}" data-device-key="${this._escape(device.key)}" ${dirty ? "" : "disabled"}>Cancel</button><button class="primary" data-action="save-device" data-section="${section}" data-device-key="${this._escape(device.key)}" ${dirty && !this._refreshing && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>${retrying ? "Retry save" : "Save " + section}</button></div>` : `<p>Choose a control method in the device settings.</p>`}
-        ${this._choices(device, section)}
+        ${selectors || mappingFields.length || systemFields.length ? `<div class="device-save-row"><span>${dirty ? "Unsaved changes" : "Saved"}</span><button class="secondary" data-action="cancel-device" data-section="${section}" data-device-key="${this._escape(device.key)}" ${dirty && !retrying && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>Discard</button><button class="primary" data-action="save-device" data-section="${section}" data-device-key="${this._escape(device.key)}" ${dirty && !this._loading && !this._refreshing && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>${retrying ? "Retry save" : "Save"}</button></div>` : `<p>Choose a control method in the device settings.</p>`}
         ${!planning ? `<small class="muted">${this._escape(device.statistic_id || "Equipment settings")}</small>` : ""}
       </div></details>`;
   }
@@ -1483,7 +1628,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
         <nav class="workspace-list" aria-label="Device list">${filtered.map(item =>
           `<button type="button" data-action="edit-device" data-device-key="${this._escape(item.key)}"
             ${item.key === device?.key ? 'aria-current="true"' : ""}>${this._escape(item.name)}
-            ${this._deviceDirty(item.key) ? "<small>Unsaved changes</small>" : item.included && item.mapping_status === "invalid" ? "<small>Needs setup</small>" : ""}</button>`).join("")}</nav>
+            ${this._deviceFormDirty(item.key) ? "<small>Unsaved changes</small>" : item.included && item.mapping_status === "invalid" ? "<small>Needs setup</small>" : ""}</button>`).join("")}</nav>
         <section class="workspace-detail" aria-label="Selected device">
         ${device ? `<header class="workspace-heading"><div><h2>${this._escape(device.name)}</h2>
           <p>${this._escape(this._label(device.category))} · ${this._escape(device.room_name || "No room")}</p></div>
@@ -1538,10 +1683,10 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const devices = this._sortedDevices().filter(device => this._deviceRoom(device) === room);
     const target = this._fieldLocations().find(location => location.scope === "mapping" &&
       location.field.key === "temperature_entity_id" && devices.some(device => device.key === location.deviceKey));
-    const probe = target && (this._mapping(target.deviceKey)?.temperature_entity_id
-      || devices.find(device => device.key === target.deviceKey)?.mapping?.temperature_entity_id);
-    const comfort = room && this._data.website_url ? new URL(this._data.website_url) : null;
-    if (comfort) comfort.search = new URLSearchParams({tab: "comfort", room}).toString();
+    const probe = this._data.configuration?.rooms?.[room]?.temperature_entity_id ??
+      (target && this._mapping(target.deviceKey)?.temperature_entity_id);
+    const comfort = room && this._data.comfort_website_url ? new URL(this._data.comfort_website_url) : null;
+    if (comfort) comfort.searchParams.set("room", room);
     return `<div class="settings-workspace">
       <nav class="workspace-list" aria-label="Room list">${rooms.map(([key, label]) =>
         `<button type="button" data-action="open-room" data-room-key="${this._escape(key)}"
@@ -1550,12 +1695,98 @@ class ShsEnergyConfigPanel extends HTMLElement {
         <header class="workspace-heading"><h2 tabindex="-1">${this._escape(name || "Rooms")}</h2>
           ${comfort ? `<a href="${this._escape(comfort.href)}" target="_blank" rel="noopener noreferrer">Edit comfort on website</a>` : ""}</header>
         ${room ? `<div class="workspace-panel"><h3>Temperature probe</h3>
-          <p>${this._escape(probe || "No room temperature probe shown")}</p>
-          ${target ? `<button type="button" class="text" data-action="edit-field" data-field-token="${this._escape(target.token)}">Edit room temperature probe</button>` : ""}</div>
+          ${target ? `<p>${this._escape(probe || "No room temperature probe shown")}</p>
+            <button type="button" class="text" data-action="edit-field" data-field-token="${this._escape(target.token)}">Edit room temperature probe</button>`
+            : this._data.room_connections ? this._renderStandaloneRoomProbe(room, probe)
+            : `<p>${this._escape(probe || "No room temperature probe shown")}</p>`}</div>
+          ${this._renderRoomConnections(room, rooms)}
           <div class="workspace-panel"><h3>Devices</h3>
           ${devices.length ? devices.map(device => `<button type="button" class="text" data-action="edit-device" data-device-key="${this._escape(device.key)}">${this._escape(device.name)}</button>`).join("") : "<p>No SHS devices in this room.</p>"}</div>`
           : "<p>No Home Assistant rooms found.</p>"}
       </section></div>`;
+  }
+
+  _renderStandaloneRoomProbe(room, probe) {
+    const choices = (this._data.entities || []).filter(entity => entity.area_id === room &&
+      entity.domain === "sensor" && entity.device_class === "temperature" &&
+      entity.state_class === "measurement" && entity.unit === "°C");
+    const current = this._standaloneProbeDraft?.room === room ? this._standaloneProbeDraft.source : probe || "";
+    const error = this._standaloneProbeError?.room === room ? this._standaloneProbeError.message : "";
+    const selected = choice => choice === current ? "selected" : "";
+    return `<div class="field"><label>Room temperature probe
+      <select data-standalone-probe data-room-key="${this._escape(room)}" ${error ? 'aria-invalid="true" aria-describedby="room-probe-error"' : ""}>
+        <option value="">No probe</option>
+        ${probe && !choices.some(item => item.entity_id === probe) ? `<option value="${this._escape(probe)}" ${selected(probe)}>${this._escape(probe)} · Unavailable</option>` : ""}
+        ${choices.map(entity => `<option value="${this._escape(entity.entity_id)}" ${selected(entity.entity_id)}>${this._escape(entity.name)}</option>`).join("")}
+      </select></label></div>
+      ${error ? `<p id="room-probe-error" role="alert">${this._escape(error)}</p>` : ""}
+      <button type="button" class="primary" data-action="save-room-probe" data-room-key="${this._escape(room)}"
+        ${this._saving || current === (probe || "") ? "disabled" : ""}>Save probe</button>`;
+  }
+
+  async _saveRoomProbe(room) {
+    const draft = this._standaloneProbeDraft;
+    if (this._saving || draft?.room !== room) return;
+    this._saving = true;
+    this._standaloneProbeError = null;
+    this._render();
+    try {
+      const data = await this._request({action: "save_room_probe", config_entry: this._entryId,
+        expected_revision: draft.revision, room_key: room, temperature_entity_id: draft.source});
+      this._standaloneProbeDraft = null;
+      this._acceptRefresh(data);
+    } catch (error) {
+      this._standaloneProbeError = {room, message: error.field_errors?.temperature_entity_id?.[0] || this._errorMessage(error)};
+    } finally {
+      this._saving = false;
+      this._render();
+      this.shadowRoot.querySelector("[data-standalone-probe]")?.focus();
+    }
+  }
+
+  _availableDoorwayRooms(room) {
+    const connected = new Set((this._doorways || []).filter(connection => connection.rooms.includes(room)).flatMap(connection => connection.rooms));
+    return Object.keys(this._data.rooms || {}).filter(key => key !== room && !connected.has(key));
+  }
+
+  _renderRoomConnections(room, rooms) {
+    const names = this._data.rooms;
+    const saved = this._data.room_connections;
+    if (saved) {
+      const profile = new URL(saved.url);
+      profile.searchParams.set("room", room);
+      const connections = (saved.connections ?? []).filter(edge => edge.rooms.includes(room));
+      const website = saved.environment === "test" ? "test website" : "website";
+      return `<div class="workspace-panel room-connections"><h3>Room connections</h3>
+        ${connections.length ? `<ul class="doorway-list">${connections.map(({rooms: pair}) => {
+          const other = pair.find(key => key !== room);
+          return `<li><div><strong>${this._escape(names[other] ?? other)}</strong></div></li>`;
+        }).join("")}</ul>` : `<p class="muted">${saved.connections ? "No saved doorways." : "Waiting for saved doorways."}</p>`}
+        <a href="${this._escape(profile.href)}" target="_blank" rel="noopener noreferrer">Edit room connections on ${website}</a></div>`;
+    }
+    const available = this._availableDoorwayRooms(room);
+    const form = this._doorwayForm?.room === room ? this._doorwayForm : null;
+    const connections = (this._doorways || []).map(({rooms: pair}, index) => {
+      if (!pair.includes(room)) return "";
+      const other = pair.find(key => key !== room);
+      if (!names[other]) return "";
+      return `<li><div><strong>${this._escape(names[other])}</strong></div>
+        <button type="button" class="text" data-action="remove-doorway" data-index="${index}" aria-label="Remove doorway to ${this._escape(names[other])}">Remove</button></li>`;
+    }).filter(Boolean);
+    return `<details class="workspace-panel room-connections" data-open-key="room-connections" ${this._expanded.has("room-connections") ? "open" : ""}>
+      <summary>Room connections</summary>
+      <div class="section-head doorway-heading"><div><h3>Doorways</h3><p class="muted">Add doorways that let heat move between rooms.</p></div>
+        ${form ? "" : `<button type="button" class="secondary" data-action="open-doorway-form" data-room-key="${this._escape(room)}" ${available.length ? "" : "disabled"}>Add doorway</button>`}</div>
+      ${connections.length ? `<ul class="doorway-list">${connections.join("")}</ul>` : '<p class="muted">No doorways added.</p>'}
+      ${form ? `<div class="doorway-form"><div class="field-grid">
+        <label class="field">Connected room<select data-doorway-field="connectedRoom" data-field-key="doorway-room">
+          <option value="">Choose a room</option>${rooms.filter(([key]) => available.includes(key)).map(([key, name]) =>
+            `<option value="${this._escape(key)}" ${key === form.connectedRoom ? "selected" : ""}>${this._escape(name)}</option>`).join("")}
+        </select></label></div>
+        <div class="doorway-actions"><button type="button" class="primary" data-action="add-doorway" ${available.includes(form.connectedRoom) ? "" : "disabled"}>Add connection</button>
+        <button type="button" class="secondary" data-action="cancel-doorway">Cancel</button></div></div>` : ""}
+      <p class="muted">Preview only. Connections reset when you reload the app.</p>
+    </details>`;
   }
 
   _scheduleSlot(device, slot) {
@@ -1881,7 +2112,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _render({ expandedCard } = {}) {
-    if (!this.shadowRoot || this._deviceSettingsDialog) return;
+    if (!this.shadowRoot) return;
     const inspectorOpen = this._inspectedEntity && this.shadowRoot.querySelector("dialog[open]");
     const active = this.shadowRoot.activeElement;
     const focusKey = active?.dataset.fieldKey;
@@ -1910,16 +2141,17 @@ class ShsEnergyConfigPanel extends HTMLElement {
       return;
     }
 
+    const hideGeneralActions = this._tab !== "energy" && !this._configurationDirty ? "hidden" : "";
     this.shadowRoot.innerHTML = `${this._styles()}
       <main class="shell">
         <header class="topbar">
           <button type="button" class="icon-button" data-action="back" aria-label="Back">←</button>
           <div class="title"><h2>Energy and device settings</h2><p>${this._data.state === "pending" ? "Waiting for Home Assistant to apply changes" : "Settings are applied"}</p></div>
           <div class="toolbar">
-            <button type="button" class="secondary" data-action="refresh" ${this._loading || this._refreshing ? "disabled" : ""}>${this._loading ? "Refreshing…" : "Refresh website choices"}</button>
-            <button type="button" class="secondary" data-action="discover" ${this._loading ? "disabled" : ""}>Review sources from HA Energy</button>
-            <button type="button" class="text" data-action="discard" ${this._dirty ? "" : "disabled"}>Discard</button>
-            <button type="button" class="primary" data-action="save" ${this._configurationDirty && !this._refreshing && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>${this._saving ? "Saving…" : "Save changes"}</button>
+            <button type="button" class="secondary" data-action="refresh" ${this._loading || this._refreshing || this._saving || this._savingDeviceKey ? "disabled" : ""}>${this._loading ? "Refreshing…" : "Refresh website choices"}</button>
+            <button type="button" class="secondary" data-action="discover" ${this._loading || this._refreshing || this._saving || this._savingDeviceKey ? "disabled" : ""}>Review sources from HA Energy</button>
+            <button type="button" class="secondary" data-action="discard" ${hideGeneralActions} ${this._dirty && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>Discard</button>
+            <button type="button" class="primary" data-action="save" ${hideGeneralActions} ${this._configurationDirty && !this._refreshing && !this._saving && !this._savingDeviceKey ? "" : "disabled"}>${this._saving ? "Saving…" : "Save changes"}</button>
           </div>
         </header>
         <nav class="tabs" aria-label="Configuration sections">${TABS.map(([id, label]) => { const count = this._attentionForTab(id).length; return `<button type="button" data-action="tab" data-tab="${id}" class="${this._tab === id ? "active" : ""}${count ? " needs-attention" : ""}">${label}${this._attentionBadge(count)}</button>`; }).join("")}</nav>
@@ -2081,19 +2313,16 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .device-card summary::-webkit-details-marker { display:none; }
       .device-card summary > div:first-child { display:flex; flex-direction:column; min-width:0; }
       .device-card summary small { color:var(--secondary-text-color); overflow:hidden; text-overflow:ellipsis; }
-      .device-header-actions { display:flex; align-items:center; gap:6px; }
-      .device-settings-button { display:grid; place-items:center; flex:none; }
-      .device-settings-dialog { width:min(420px, calc(100vw - 32px)); padding:22px; border:1px solid var(--divider-color); border-radius:14px; background:var(--card-background-color); color:var(--primary-text-color); }
-      .device-settings-dialog::backdrop { background:#0008; }
-      .device-settings-dialog h2 { margin-top:0; }
-      .device-settings-dialog form { display:grid; gap:12px; }
-      .device-settings-dialog label { display:grid; gap:6px; }
-      .device-settings-dialog select:focus-visible { outline:3px solid var(--primary-color); outline-offset:3px; }
-      .device-settings-actions { display:flex; justify-content:flex-end; gap:8px; }
+      .device-header-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:4px 12px; }
+      .device-inclusion { display:inline-flex; flex:none; align-items:center; gap:8px; min-height:44px; cursor:pointer; }
+      .device-inclusion:has(input:disabled) { cursor:default; }
       .device-fieldset { display: contents; }
-  .device-body { border-top:1px solid var(--divider-color); padding:22px; }
-      .device-save-row { display:flex; justify-content:flex-end; align-items:center; gap:16px; margin-top:24px; padding-top:18px; border-top:1px solid var(--divider-color); }
+      .device-body { border-top:1px solid var(--divider-color); padding:22px; }
+      .device-body > .choices:first-child { border-top:0; margin-top:0; padding-top:0; }
+      .device-save-row { display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:12px; margin-top:24px; padding-top:18px; border-top:1px solid var(--divider-color); }
       .device-save-row span { color:var(--secondary-text-color); font-size:13px; }
+      .device-save-row button, .room-connections button { min-height:44px; }
+      button[data-action="cancel-device"]:enabled, button[data-action="discard"]:enabled { border-color:var(--primary-color); background:var(--secondary-background-color); }
       .inline-warning { padding:11px 13px; margin:10px 0; border-radius:9px; color:var(--warning-color); background:color-mix(in srgb, var(--warning-color) 10%, transparent); }
       .inline-error { display:flex; gap:10px; align-items:center; padding:11px 13px; margin:10px 0; border-radius:9px; color:var(--error-color); background:color-mix(in srgb, var(--error-color) 10%, transparent); }
       .inline-error span { flex:1; }
@@ -2137,12 +2366,22 @@ class ShsEnergyConfigPanel extends HTMLElement {
       .workspace-panel { padding:14px; border:1px solid var(--divider-color); border-radius:10px; margin:10px 0; }
       .workspace-panel h3 { margin:0 0 8px; }
       .workspace-panel p { overflow-wrap:anywhere; }
+      .room-connections > summary { cursor:pointer; font-weight:600; padding-block:4px; }
+      .doorway-heading { flex-wrap:wrap; align-items:flex-start; margin-top:16px; }
+      .doorway-heading p { margin:0; }
+      .doorway-list { list-style:none; margin:12px 0; padding:0; }
+      .doorway-list li { display:flex; align-items:center; justify-content:space-between; gap:8px; border-top:1px solid var(--divider-color); }
+      .doorway-list li span { display:block; }
+      .doorway-form { padding:14px; border:1px solid var(--divider-color); border-radius:10px; background:var(--secondary-background-color); }
+      .doorway-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
       .workspace-card.card { border:0; padding:0; box-shadow:none; }
       @media (max-width:700px) {
         .settings-workspace { grid-template-columns:minmax(0,1fr); }
         .workspace-list { flex-direction:row; overflow-x:auto; border-inline-end:0; border-bottom:1px solid var(--divider-color); }
         .workspace-list button { flex:none; max-width:15rem; }
         .workspace-detail { padding:14px; }
+        .device-card summary { flex-wrap:wrap; gap:4px 12px; }
+        .device-header-actions { margin-inline-start:auto; }
       }
       @media (max-width:700px) { .topbar { padding:12px; position:relative; } .tabs { top:0; position:sticky; padding:8px 12px; } .content { padding:16px 12px 88px; } .toolbar { display:grid; grid-template-columns:1fr 1fr; } .field-grid { grid-template-columns:1fr; } .card { padding:18px; border-radius:13px; } .device-card { padding:0; } .diagnostics dl div { grid-template-columns:1fr; gap:5px; } }
     </style>`;
