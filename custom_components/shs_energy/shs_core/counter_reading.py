@@ -6,6 +6,10 @@ from .counter_changes import CounterIntervals, CounterRow, judge_counter_rows, r
 from .readings import usable_change
 from .household_ports import HouseholdReadError
 
+# Increment when counter settlement/qualification semantics change. Stored
+# observations carry this provenance even when an older payload is retried.
+COUNTER_PROCESSING_REVISION = 1
+
 _LOGGER = logging.getLogger(__name__)
 
 

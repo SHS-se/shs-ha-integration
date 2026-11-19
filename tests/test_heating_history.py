@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components/shs_energy"))
@@ -93,6 +93,7 @@ class NativeHeatingHistoryTests(unittest.IsolatedAsyncioTestCase):
         recorder.energy("sensor.energy_a", "hour", [.5])
         result = await capture(recorder)
         self.assertEqual(len(result.observations), 1)
+        self.assertEqual(result.observations[0]["counter_processing_revision"], 1)
         row = result.observations[0]
         self.assertEqual(row["duration_s"], 3600)
         self.assertEqual(row["source"], "recorder_hour_mean")
@@ -203,6 +204,7 @@ class NativeHeatingHistoryTests(unittest.IsolatedAsyncioTestCase):
         repaired = await capture(recorder, household=household, end=START + timedelta(hours=3))
         self.assertEqual([row["duration_s"] for row in repaired.observations], [3600] * 3)
         self.assertTrue(all(row["invalidated_device_keys"] == ["heater"] for row in repaired.observations))
+        self.assertTrue(all(row["counter_processing_revision"] == 1 for row in repaired.observations))
 
     async def test_absent_counter_and_missing_predecessor_do_not_withdraw_previous_measurements(self):
         recorder = Recorder()
@@ -353,6 +355,15 @@ def source_fixture():
 
 
 class HeatingSourceTests(unittest.TestCase):
+    def test_counter_processing_upgrade_resweeps_history(self):
+        devices, mappings, rooms = source_fixture()
+        value = heating_history_sources(devices, mappings, rooms,
+            lambda _: SimpleNamespace(attributes={"hvac_modes": ["heat", "off"]}))
+        before = value.signature
+        with patch("shs_core.heating_history.COUNTER_PROCESSING_REVISION", 2):
+            self.assertNotEqual(value.signature, before)
+        self.assertEqual(value.signature, before)
+
     def test_verified_heating_scope_and_explicit_climate_capabilities(self):
         devices, mappings, rooms = source_fixture()
         devices += [{**devices[0], "key": "pool", "category": "pool_heating", "mapping_summary": {"room_key": "pool_room"}},

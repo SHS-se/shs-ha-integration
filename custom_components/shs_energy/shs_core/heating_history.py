@@ -18,6 +18,7 @@ from typing import Any, Protocol
 from .thermal import configured_room_air_probes, house_temperature_quarters, quarter_means, thermal_zone_inputs, time_weighted_quarters
 from .probe_evidence import native_probe_bounds, probe_interval_facts
 from .household_ports import HouseholdReadError
+from .counter_reading import COUNTER_PROCESSING_REVISION
 
 QUARTER = timedelta(minutes=15)
 HOUR = timedelta(hours=1)
@@ -76,7 +77,7 @@ class HeatingHistorySources:
 
     @property
     def signature(self) -> str:
-        identity = {"revision": 1, **asdict(self)}
+        identity = {"revision": 1, "counter_processing_revision": COUNTER_PROCESSING_REVISION, **asdict(self)}
         return sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
@@ -439,6 +440,7 @@ async def capture_heating_history(
                     "device_statistics": {key: device_statistics.get(key) for key in keys},
                     "device_energy_kwh": recorded, "cooling": _mode(binding, steps, cooling),
                     "invalidated_device_keys": withdrew,
+                    "counter_processing_revision": COUNTER_PROCESSING_REVISION,
                     "heater_energy_limits_w": dict(binding.heater_limits_w)}
 
         def complete(row):
