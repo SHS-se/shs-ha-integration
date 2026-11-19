@@ -299,7 +299,8 @@ class PlanningJobTests(unittest.IsolatedAsyncioTestCase):
         async def statistics(begin, end, entities, period, units, kinds):
             if period == 'month':
                 # Never more than 12 kW through the grid meter: 1 kWh in five minutes.
-                return {'sensor.synthetic_grid_power': [{'max': 12000.0, 'min': -500.0}]}
+                return {'sensor.synthetic_grid_power': [{'start':datetime(2026,10,1,tzinfo=timezone.utc).timestamp(),
+                    'end':datetime(2026,11,1,tzinfo=timezone.utc).timestamp(), 'max':12000.0, 'min':-500.0}]}
             windows.append(round((boundary - begin - timedelta(minutes=5)) / timedelta(hours=1)))
             rows, reading, start = [], 500.0, origin
             while start < end:

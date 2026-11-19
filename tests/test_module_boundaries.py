@@ -56,7 +56,7 @@ PURE_MODULES = (
     "shs_core.optimisation",
     "shs_core.measurements",
     "shs_core.planning", "shs_core.device_observations", "shs_core.room_electrical", "shs_core.device_draw",
-    "shs_core.readings", "shs_core.counter_changes",
+    "shs_core.readings", "shs_core.counter_changes", "shs_core.counter_reading", "shs_core.counter_evidence",
     "shs_core.supplier",
     "shs_core.tariff",
     "shs_core.thermal", "shs_core.heating_history", "shs_core.heating_lineage", "shs_core.probe_evidence",

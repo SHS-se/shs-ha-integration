@@ -158,8 +158,11 @@ from .planning import (
     pool_electrical_history,
     unplanned_services,
 )
-from .counter_changes import CounterIntervals, CounterRow, judge_counter_rows, retract_catch_ups, settled_energy
-from .readings import daily_category_readings, usable_change
+from .counter_changes import CounterIntervals
+from .counter_reading import CounterReader
+from .counter_evidence import CounterSource, envelope, refresh_counter_evidence, validate_counter_evidence
+from .heating_lineage import prepare_heating_counter_evidence, qualified_heating_reader, heating_counter_sources
+from .readings import daily_category_readings
 from .heating_history import (capture_heating_history, HeatingRoomBinding, HeatingHistoryCapture,
                               HeatingHistorySources, heating_history_sources, heating_history_window, heating_recent_window, accepted_heating_cursor, queue_probe_repair, next_probe_repair, probe_repair_windows)
 from .heating_lineage import validate_heating_lineage, heating_source_segments, heating_lineage_revision, matching_heating_assignments
@@ -296,7 +299,6 @@ class Household:
         # The most each energy counter's equipment can draw, W, and the newest
         # catch-up whose stall may reach back past the quarters just read.
         self._counter_bounds_w: dict[str, float] = {}
-        self._counter_bounds_at: tuple[Any, frozenset[tuple[str, str, str]]] | None = None
         self._open_catch_up: datetime | None = None
         self.replan_recommendations: list[dict[str, str]] = []
         self.last_optimisation_push: str | None = None
@@ -1507,80 +1509,15 @@ class Household:
             ),
         }
 
-    async def _statistics_changes(
-        self,
-        entity_ids: list[str],
-        start: datetime,
-        end: datetime,
-        period: str,
-    ) -> CounterIntervals:
-        """Read the energy each counter really recorded, with UTC-aware timestamps.
-
-        A change Recorder synthesised from a counter that went backwards, or
-        one that spans a period it skipped, is not that period's energy. Those
-        samples are settled from the counter's own readings or left out; a
-        sample left out is unknown, never zero. See ``counter_changes``.
-        """
-        if not entity_ids:
-            return CounterIntervals()
-        start_utc, end_utc = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
-        # The period before the window says whether the window's first change
-        # is its own. Calendar periods have no fixed length to step back by.
-        lookback = {"5minute": timedelta(minutes=5), "hour": timedelta(hours=1)}.get(period)
-        stats = await self.ports.history.statistics(
-            start_utc - lookback if lookback else start_utc,
-            end_utc,
-            set(entity_ids),
-            period,
-            {"energy": "kWh"},
-            {"change", "state"},
-        )
-        judged = {entity_id: judge_counter_rows(rows, start_utc if lookback else None)
-                  for entity_id, rows in stats.items()}
-        settled = await self._settled_counter_energy(judged, start_utc, end_utc)
-
-        result = CounterIntervals()
-        for entity_id, rows in judged.items():
-            values: list[tuple[datetime, float]] = []
-            invalidated: set[datetime] = set()
-            for row in rows:
-                # The recorder returns the bucket that starts exactly on end,
-                # so the still-running current day/hour would otherwise be
-                # pushed as if it were complete. Keep the window half-open.
-                if row.start >= end_utc or (lookback and row.start < start_utc):
-                    continue
-                if row.verdict == "unknown":
-                    if row.invalidated:
-                        invalidated.add(row.start)
-                    continue
-                energy = (settled.get((entity_id, row.start)) if row.verdict == "suspect"
-                          else usable_change(row.change))
-                if energy is None:
-                    if row.invalidated or row.verdict == "trusted":
-                        invalidated.add(row.start)
-                    continue
-                values.append((row.start, energy))
-            bound_w = self._counter_bounds_w.get(entity_id)
-            if bound_w and lookback:
-                # A counter that stalled and caught up: more in one period than
-                # the equipment can draw. The total is real, its timing is not.
-                seconds = lookback.total_seconds()
-                before = {at for at, _ in values}
-                values, stalls, open_ended = retract_catch_ups(values, bound_w / 1000 * seconds / 3600, seconds)
-                invalidated.update(before - {at for at, _ in values})
-                for first, caught_up, energy in stalls:
-                    _LOGGER.warning(
-                        "Counter %s stalled from %s and caught up %.3f kWh at %s (most it can use in "
-                        "one period: %.3f kWh); those periods are left unmeasured", entity_id,
-                        first.isoformat(), energy, caught_up.isoformat(), bound_w / 1000 * seconds / 3600)
-                if open_ended and (self._open_catch_up is None or open_ended > self._open_catch_up):
-                    self._open_catch_up = open_ended
-            result[entity_id] = values
-            if invalidated:
-                result.invalidated[entity_id] = invalidated
+    async def _statistics_changes(self, entity_ids, start, end, period) -> CounterIntervals:
+        """Current observations use the same cleaner as dated native capture."""
+        reader = CounterReader(self.ports.history, self._counter_bounds_w)
+        result = await reader.changes(entity_ids, start, end, period)
+        if reader.open_catch_up and (self._open_catch_up is None or reader.open_catch_up > self._open_catch_up):
+            self._open_catch_up = reader.open_catch_up
         return result
 
-    async def _refresh_counter_bounds(self, entities_by_category, devices) -> None:
+    async def _refresh_counter_bounds(self, entities_by_category, devices, stored=None) -> None:
         """Learn what each energy counter's equipment can draw, from evidence the home holds.
 
         A solar or house meter is bounded by the greatest power its own power
@@ -1616,73 +1553,43 @@ class Household:
             if type(rating) in (int, float) and isfinite(rating) and rating > 0:
                 bounds.update((counter, float(rating)) for counter in entities_by_category.get(category) or ())
         now = self.ports.utcnow()
-        cached = self._counter_bounds_at
-        if cached and cached[1] == frozenset(sensors) and now - cached[0] < timedelta(hours=1):
-            self._counter_bounds_w = {**self._counter_bounds_w, **bounds}
-            return
-        peaks: dict[tuple[str, str], float] = {}
-        if sensors:
-            try:
-                rows = await self.ports.history.statistics(
-                    now - timedelta(days=400), now, {sensor for _, sensor, _ in sensors}, "month",
-                    {"power": "W"}, {"max", "min"})
-            except HouseholdReadError as err:
-                _LOGGER.debug("Recorded power peaks unavailable; counters are read without a bound: %s", err)
-                return
-            for sensor, months in rows.items():
-                for extreme, sign in (("max", 1), ("min", -1)):
-                    values = [row.get(extreme) for row in months]
-                    values = [sign * float(value) for value in values
-                              if type(value) in (int, float) and isfinite(value) and sign * value > 0]
-                    if values:
-                        peaks[(sensor, extreme)] = max(values)
-        for counter, sensor, extreme in sensors:
-            if (sensor, extreme) in peaks:
-                # Several counters behind one sensor are each at most its peak.
-                bounds[counter] = max(bounds.get(counter, 0.0), peaks[(sensor, extreme)])
-        self._counter_bounds_w = bounds
-        self._counter_bounds_at = (now, frozenset(sensors))
-
-    async def _settled_counter_energy(
-        self, judged: dict[str, list[CounterRow]], start: datetime, end: datetime,
-    ) -> dict[tuple[str, datetime], float]:
-        """Settle the rows Recorder synthesised from the counters' own readings.
-
-        Rare, so the readings are fetched only for the counters and the span
-        that need them. Readings that cannot be read leave the rows unknown.
-        """
-        suspects = {entity_id: [row for row in rows if row.verdict == "suspect"
-                                and start <= row.start < end and row.end is not None]
-                    for entity_id, rows in judged.items()}
-        suspects = {entity_id: rows for entity_id, rows in suspects.items() if rows}
-        if not suspects:
-            return {}
-        first = min(row.start for rows in suspects.values() for row in rows)
-        last = max(row.end for rows in suspects.values() for row in rows)
+        if stored is None:
+            stored = await self._store.async_load() or {}
+        ledger = stored["counter_peak_evidence"] = validate_counter_evidence(stored.get("counter_peak_evidence"))
+        # Current heating sources use their physical epoch too, including when
+        # an energy entity name was reused for replacement hardware.
+        from .configuration_schema import shared_devices
+        heating_counters = {str(device['statistic_id']) for device in devices
+            if device.get('category') == 'heating' and device.get('statistic_id')}
         try:
-            states = await self.ports.history.states(first, last, sorted(suspects), with_attributes=False)
-        except HouseholdReadError as err:
-            _LOGGER.warning("Counter readings could not be read; affected periods stay unknown: %s", err)
-            return {}
-        settled: dict[tuple[str, datetime], float] = {}
-        for entity_id, rows in suspects.items():
-            readings: list[tuple[datetime, float]] = []
-            for at, state, _attributes in states.get(entity_id, ()):
-                try:
-                    value = float(state)
-                except (TypeError, ValueError):
-                    continue
-                if isfinite(value) and isinstance(at, datetime):
-                    readings.append((at.astimezone(timezone.utc), value))
-            readings.sort()
-            for row in rows:
-                energy = settled_energy(row, readings)
-                _LOGGER.info("Counter %s went backwards in the period from %s: %s", entity_id,
-                             row.start.isoformat(),
-                             "energy unknown" if energy is None else f"{energy:.3f} kWh from its readings")
-                if energy is not None:
-                    settled[(entity_id, row.start)] = energy
-        return settled
+            current = heating_history_sources(shared_devices(devices, options), mappings,
+                options.get("rooms", {}), self.ports.read_state,
+                outdoor_entity=options.get(OPT_OUTDOOR_TEMPERATURE_ENTITY),
+                pool_water_entity=options.get(OPT_POOL_WATER_TEMPERATURE_ENTITY))
+            lineage = stored.get("heating_history_sources")
+            if lineage is not None:
+                lineage = validate_heating_lineage(lineage)
+            segments = heating_source_segments(current, lineage, now, now + timedelta(microseconds=1))
+            exact = {source.energy: source for source in heating_counter_sources(segments[0].sources).values()} if segments else {}
+        except (ValueError, TypeError, KeyError) as error:
+            # Bad optional room metadata defers only heating qualification.
+            # Native capture diagnoses it separately; unrelated grid/solar/
+            # house evidence still survives restart and refreshes normally.
+            _LOGGER.warning("Historical counter source catalog unavailable: %s", error)
+            exact = None
+            bounds.update({counter:value for counter,value in self._counter_bounds_w.items()
+                if counter in heating_counters})
+        descriptors = [(exact or {}).get(counter, CounterSource(counter, sensor, extreme))
+            for counter, sensor, extreme in sensors if exact is not None or counter not in heating_counters]
+        await refresh_counter_evidence(self.ports.history, ledger, descriptors, now)
+        # Retained ledger buckets survive empty/failed reads and app restarts.
+        # Explicit pairing changes cannot inherit an unrelated meter's peak.
+        for source in descriptors:
+            bound = envelope(ledger, source)
+            if bound is not None:
+                bounds[source.energy] = max(bounds.get(source.energy, 0.0), bound)
+        await self._store.async_save(stored)
+        self._counter_bounds_w = bounds
 
     async def _statistics_means(
         self, entity_ids: list[str], start: datetime, end: datetime
@@ -1794,17 +1701,17 @@ class Household:
         self, *, bindings: list[HeatingRoomBinding], device_statistics: dict[str, str],
         room_air_probes: dict[str, str], outdoor_entity: str | None,
         start: datetime, end: datetime,
-        probe_topology=None,
+        read_energy, probe_topology=None,
     ) -> HeatingHistoryCapture:
         """Native learning evidence, using the normal counter settlement owner."""
         return await capture_heating_history(
-            history=self.ports.history, read_energy=self._statistics_changes,
+            history=self.ports.history, read_energy=read_energy,
             bindings=bindings, device_statistics=device_statistics,
             room_air_probes=room_air_probes, outdoor_entity=outdoor_entity,
             start=start, end=end, probe_topology=probe_topology,
         )
 
-    async def _heating_history_upload(self, options, devices, end, cursor, *, include_history=True, lineage=None):
+    async def _heating_history_upload(self, options, devices, end, cursor, *, include_history=True, lineage=None, stored=None):
         """Capture native heating evidence without modifying legacy actuals."""
         from .configuration_schema import shared_devices
         sources = heating_history_sources(
@@ -1816,8 +1723,15 @@ class Household:
             return None, None, None
         lineage = validate_heating_lineage(lineage) if lineage is not None else None
         sources = replace(sources, lineage_revision=heating_lineage_revision(sources, lineage))
+        if stored is None:
+            stored = await self._store.async_load() or {}
+        ledger = stored["counter_peak_evidence"] = validate_counter_evidence(stored.get("counter_peak_evidence"))
+        sources = await prepare_heating_counter_evidence(self.ports.history, sources, lineage, ledger, end)
+        # Durable evidence must precede derived observations, including a
+        # partial successful refresh followed by an unavailable source.
+        await self._store.async_save(stored)
         previous = cursor.get("rooms", {}) if isinstance(cursor, dict) else {}
-        pending = {"rooms": {}}
+        pending = {"rooms": {}, "deferred_rooms": []}
         windows = {}
         for binding in sources.bindings:
             room_sources = sources.for_room(binding)
@@ -1874,12 +1788,17 @@ class Household:
         # retry its own range while accepted rooms continue the backfill.
         for segment, selected_rooms, window in segments:
             resolved = segment.sources
-            bindings = [binding for binding in resolved.bindings if binding.room_key in selected_rooms]
+            reader, pending_devices = qualified_heating_reader(self.ports.history, resolved, ledger)
+            deferred = {binding.room_key for binding in resolved.bindings
+                if binding.room_key in selected_rooms and pending_devices.intersection(binding.device_keys)}
+            pending["deferred_rooms"] = sorted(set(pending["deferred_rooms"]) | deferred)
+            bindings = [binding for binding in resolved.bindings
+                if binding.room_key in selected_rooms and binding.room_key not in deferred]
             captured = await self.capture_heating_history(
                 bindings=bindings, device_statistics={key: resolved.device_statistics[key]
                     for binding in bindings for key in binding.device_keys if key in resolved.device_statistics},
                 room_air_probes=resolved.room_air_probes, outdoor_entity=resolved.outdoor_entity,
-                start=segment.start, end=segment.end, probe_topology=topology)
+                start=segment.start, end=segment.end, probe_topology=topology, read_energy=reader.changes)
             for row in captured.observations:
                 rows[(row["room_key"],row["source_key"],row["start"],row["duration_s"])] = row
             if not topology_available or captured.diagnostics.get("probe_evidence_read_failures"):
@@ -3275,7 +3194,7 @@ class Household:
         profile_start = profile_end - timedelta(
             days=OPTIMISATION_PROFILE_DAYS
         )
-        await self._refresh_counter_bounds(entities_by_category, devices)
+        await self._refresh_counter_bounds(entities_by_category, devices, stored)
         profile_actuals, device_profile_actuals = await self._planning_actual_quarters(
             entities_by_category, devices, profile_start, profile_end
         )
@@ -4297,7 +4216,7 @@ class Household:
                 # quarters before the server prepares the new plan.
                 measured = bool(entities.get("total_consumption") or entities.get("grid_import")) \
                     and start < complete_end
-                await self._refresh_counter_bounds(entities, devices)
+                await self._refresh_counter_bounds(entities, devices, stored)
                 self._open_catch_up = None
                 actuals = await self._actual_quarters(entities, start, complete_end) if measured else []
                 if measured:
@@ -4374,12 +4293,15 @@ class Household:
                     async with asyncio.timeout(8):
                         heating_observations, heating_probe_observations, pending_heating_history = await self._heating_history_upload(
                             thermal_options, devices, complete_end, stored.get("heating_history_cursor"),
-                            include_history=replan_request_id is None, lineage=stored.get("heating_history_sources"))
+                            include_history=replan_request_id is None, lineage=stored.get("heating_history_sources"), stored=stored)
                 except (HouseholdReadError, OptimisationInputError, ValueError, KeyError, TypeError, TimeoutError) as err:
                     _LOGGER.warning("Native heating observations unavailable: %s", err)
                     self._pipeline_error('heating_inputs', err, fix=getattr(err, 'fix', None))
                 else:
-                    self._pipeline_error('heating_inputs', None)
+                    deferred = (pending_heating_history or {}).get('deferred_rooms', [])
+                    self._pipeline_error('heating_inputs', HouseholdReadError(
+                        f"Heating history is waiting for recorded power evidence for {len(deferred)} room(s); planning continues")
+                        if deferred else None)
                 try:
                     pool_slots = (await self._pool_quarters(
                         thermal_options, thermal_start, complete_end
@@ -4631,8 +4553,9 @@ class Household:
                             and type(result.get("heating_probe_observations_accepted")) is int
                             and result["heating_probe_observations_accepted"] == len(heating_probe_observations or [])
                             and not pending_heating_history.get("probe_capture", {}).get("read_failed_windows"))
-                self._pipeline_error("heating_inputs", None if complete else ValueError(
-                    "Some heating history sources were not accepted; those rooms will be retried."))
+                if not pending_heating_history.get("deferred_rooms"):
+                    self._pipeline_error("heating_inputs", None if complete else ValueError(
+                        "Some heating history sources were not accepted; those rooms will be retried."))
             if result.get("thermal_slots_accepted_until"):
                 stored["thermal_slots_accepted_until"] = result[
                     "thermal_slots_accepted_until"

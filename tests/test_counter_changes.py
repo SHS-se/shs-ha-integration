@@ -251,6 +251,11 @@ class StalledPlantTests(unittest.IsolatedAsyncioTestCase):
                 recorded = {"sensor.pv_power": [{"max": 9100.0, "min": 0.0}, {"max": 13200.0, "min": 0.0}],
                             "sensor.grid_power": [{"max": 15000.0, "min": -7000.0}],
                             "sensor.heater_power": [{"max": 3400.0, "min": 0.0}]}
+                # Actual native month boundaries are part of retained peak provenance.
+                for values in recorded.values():
+                    for index, row in enumerate(values):
+                        row.update(start=(T0-timedelta(days=60-30*index)).timestamp(),
+                                   end=(T0-timedelta(days=30-30*index)).timestamp())
                 return {entity: recorded[entity] for entity in entities if entity in recorded}
             return {entity: [row for row in self.rows[entity] if row["start"] >= start.timestamp()]
                     for entity in entities}

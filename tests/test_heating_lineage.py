@@ -97,7 +97,7 @@ class SourceLineageTests(unittest.TestCase):
         self.assertEqual(old.device_statistics, {"heater":"sensor.previous_energy"})
         self.assertEqual(old.room_air_probes["room_a"], "sensor.previous_air")
         self.assertEqual(old.bindings[0].heater_limits_w, {"heater":800})
-        self.assertEqual(current, self.sources())
+        self.assertEqual(current, replace(self.sources(), counter_epochs={"heater": ((START+timedelta(hours=1)).isoformat(), None)}))
         self.assertEqual(found[0].end, found[1].start)
 
     def test_other_physical_binding_cannot_inherit_previous_heater(self):
@@ -213,7 +213,7 @@ class SourceCaptureTests(unittest.IsolatedAsyncioTestCase):
         recorder.temperatures("hour")
         recorder.rows["hour"]["sensor.air_a"][0]["mean"] = 85
         recorder.energy("sensor.energy_a","hour",[.2])
-        captured = await owner(recorder).capture_heating_history(bindings=[binding()],
+        captured = await owner(recorder).capture_heating_history(read_energy=owner(recorder)._statistics_changes, bindings=[binding()],
             device_statistics={"heater":"sensor.energy_a"},room_air_probes=PROBES,outdoor_entity="sensor.outdoors",
             start=START,end=START+timedelta(hours=1))
         self.assertEqual(captured.observations[0]["device_energy_kwh"],{"heater":.2})
@@ -236,7 +236,7 @@ class SourceCaptureTests(unittest.IsolatedAsyncioTestCase):
         rows = []
         for segment in heating_source_segments(sources,validate_heating_lineage(catalog),START,START+timedelta(hours=2)):
             q = segment.sources
-            result = await owner(recorder).capture_heating_history(bindings=q.bindings,device_statistics=q.device_statistics,
+            result = await owner(recorder).capture_heating_history(read_energy=owner(recorder)._statistics_changes, bindings=q.bindings,device_statistics=q.device_statistics,
                 room_air_probes=q.room_air_probes,outdoor_entity=q.outdoor_entity,start=segment.start,end=segment.end)
             rows.extend(result.observations)
         swap = START+timedelta(minutes=37)
@@ -256,7 +256,7 @@ class SourceCaptureTests(unittest.IsolatedAsyncioTestCase):
                 raise HouseholdReadError("companion statistics unavailable")
             return await original(start,end,entities,*args)
         recorder.statistics = read
-        result = await owner(recorder).capture_heating_history(bindings=[binding()],
+        result = await owner(recorder).capture_heating_history(read_energy=owner(recorder)._statistics_changes, bindings=[binding()],
             device_statistics={"heater":"sensor.energy_a"},room_air_probes=PROBES,outdoor_entity="sensor.outdoors",
             start=START,end=START+timedelta(hours=1),probe_topology={"sensor.air_a":{"companions":["sensor.humidity"]}})
         self.assertEqual(result.observations[0]["device_energy_kwh"],{"heater":.2})
@@ -293,7 +293,7 @@ class SourceCaptureTests(unittest.IsolatedAsyncioTestCase):
                 row.update(min=row["mean"],max=row["mean"])
         recorder.energy("sensor.energy_a", "hour", [.2])
         recorder.rows["hour"]["sensor.rh"] = [{**temperature(START+timedelta(hours=i),3600,50),"min":50,"max":50} for i in (-1,0)]
-        result = await owner(recorder).capture_heating_history(bindings=[binding(),replace(binding(),room_key="room_b")],
+        result = await owner(recorder).capture_heating_history(read_energy=owner(recorder)._statistics_changes, bindings=[binding(),replace(binding(),room_key="room_b")],
             device_statistics={"heater":"sensor.energy_a"},room_air_probes=PROBES,outdoor_entity="sensor.outdoors",
             start=START,end=START+timedelta(hours=1),probe_topology={"sensor.air_a":{"companions":["sensor.rh"]}})
         self.assertEqual(len(result.observations), 2)

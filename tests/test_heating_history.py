@@ -77,7 +77,9 @@ def binding(*, devices=("heater",), resistance=True, actuators=()):
 
 
 async def capture(recorder, *, room=None, start=START, end=None, household=None):
-    return await (household or owner(recorder)).capture_heating_history(
+    household = household or owner(recorder)
+    return await household.capture_heating_history(
+        read_energy=household._statistics_changes,
         bindings=[room or binding()], device_statistics={"heater": "sensor.energy_a", "other": "sensor.energy_b"},
         room_air_probes=PROBES, outdoor_entity="sensor.outdoors", start=start,
         end=end or start + timedelta(hours=1),
@@ -467,6 +469,40 @@ class HeatingExchangeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("snapshot", body)
         self.assertNotIn("heating_observations", body)
         self.assertEqual(self.rig.records.saved["heating_history_cursor"], before)
+
+    async def test_invalid_optional_catalog_keeps_actuals_and_planning_running_but_defers_native(self):
+        devices,mappings,rooms = source_fixture()
+        self.rig.options.update(rooms=rooms,device_control_mappings=mappings)
+        self.h._prepared_device_inventory.return_value = devices
+        self.rig.records.saved["heating_history_sources"] = {"revision":"broken","assignments":[{}]}
+        self.h._configured_entities = lambda: {"grid_import":["sensor.grid"]}
+        actual = {"start":(self.rig.now-timedelta(minutes=15)).isoformat(),"grid_import_kwh":.2}
+        self.h._actual_quarters = AsyncMock(return_value=[actual])
+        await self.h.async_optimisation_push(force_plan=True)
+        body = self.h.client.submit_optimisation.call_args.args[0]
+        self.assertIn("snapshot",body)
+        self.assertTrue(body["actual_slots"])
+        self.assertNotIn("heating_observations",body)
+        self.assertTrue(any(item["key"]=="pipeline:heating_inputs" for item in self.h.attention_items))
+
+    async def test_inconsistent_room_mapping_cannot_stop_current_actuals_or_planning(self):
+        devices,mappings,rooms = source_fixture()
+        # Two configured heater members disagree about the room-air probe.
+        devices.append({**devices[0],"key":"second","statistic_id":"sensor.second_energy"})
+        mappings['second'] = {**mappings['heater'],"temperature_entity_id":"sensor.conflicting_air"}
+        self.rig.options.update(rooms=rooms,device_control_mappings=mappings)
+        self.h._prepared_device_inventory.return_value = devices
+        await self.h.async_optimisation_push(force_plan=True)
+        self.assertIn("snapshot",self.h.client.submit_optimisation.call_args.args[0])
+        self.assertTrue(any(item["key"]=="pipeline:heating_inputs" for item in self.h.attention_items))
+
+    async def test_pending_peak_evidence_is_visible_without_stopping_planning(self):
+        self.h._heating_history_upload = AsyncMock(return_value=([],[],{
+            "rooms":{"room_a":{"before":START.isoformat()}},"deferred_rooms":["room_a"]}))
+        await self.h.async_optimisation_push(force_plan=True)
+        self.assertIn("snapshot",self.h.client.submit_optimisation.call_args.args[0])
+        issue = next(item for item in self.h.attention_items if item["key"]=="pipeline:heating_inputs")
+        self.assertIn("waiting for recorded power evidence",issue["detail"])
 
     async def test_upload_passes_native_rows_and_records_exact_acceptance(self):
         row = {"room_key": "room_a", "source_key": "source_a", "start": START.isoformat(), "duration_s": 3600}

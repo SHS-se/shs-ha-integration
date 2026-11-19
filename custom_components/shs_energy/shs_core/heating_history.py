@@ -62,11 +62,17 @@ class HeatingHistorySources:
     room_air_probes: dict[str, str]
     outdoor_entity: str | None
     lineage_revision: str = ""
+    device_power_statistics: dict[str, str] = field(default_factory=dict)
+    counter_epochs: dict[str, tuple[str | None, str | None]] = field(default_factory=dict)
+    counter_qualification: dict[str, object] = field(default_factory=dict)
 
     def for_room(self, binding: HeatingRoomBinding) -> HeatingHistorySources:
         return HeatingHistorySources([binding],
             {key: self.device_statistics[key] for key in binding.device_keys if key in self.device_statistics},
-            self.room_air_probes, self.outdoor_entity, self.lineage_revision)
+            self.room_air_probes, self.outdoor_entity, self.lineage_revision,
+            {key: self.device_power_statistics[key] for key in binding.device_keys if key in self.device_power_statistics},
+            {key: self.counter_epochs[key] for key in binding.device_keys if key in self.counter_epochs},
+            {key: self.counter_qualification[key] for key in binding.device_keys if key in self.counter_qualification})
 
     @property
     def signature(self) -> str:
@@ -120,7 +126,9 @@ def heating_history_sources(devices, mappings, rooms, read_state, *, outdoor_ent
             tuple(sorted(set(zone["device_keys"]))), bool(actuators) and all(map(heat_only, actuators)),
             actuators, tuple(entity for entity in actuators if heat_only(entity))))
     statistics = {key: statistics[key] for binding in bindings for key in binding.device_keys if key in statistics}
-    return HeatingHistorySources(bindings, statistics, probes, outdoor_entity)
+    powers = {key: mappings[key]['power'] for key in statistics if isinstance(mappings.get(key), dict)
+              and isinstance(mappings[key].get('power'), str) and mappings[key]['power']}
+    return HeatingHistorySources(bindings, statistics, probes, outdoor_entity, device_power_statistics=powers)
 
 
 def heating_recent_window(sources: HeatingHistorySources, cursor, end: datetime, *, room_count=None):
@@ -180,7 +188,10 @@ def accepted_heating_cursor(result, submitted, pending, previous=None, *, probe_
     old = previous.get("rooms", {}) if isinstance(previous, dict) else {}
     rooms = {room: old[room] for room in pending.get("rooms", {}) if room in old}
     advanced = False
+    deferred = set(pending.get("deferred_rooms", []))
     for room, cursor in pending.get("rooms", {}).items():
+        if room in deferred:
+            continue
         keys = [key for key in counts if key[0] == room]
         # Empty successful reads are explicit through the overall response;
         # no source-specific row can exist when nothing was submitted for it.
