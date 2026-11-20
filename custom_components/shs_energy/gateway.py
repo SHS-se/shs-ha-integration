@@ -45,6 +45,7 @@ from .shs_core.device_gateway import DeviceGateway, DeviceIntent
 from .shs_core.device_operations import ControlDeadlineError, ControlObservationError, PowerHistoryError, HeatingDeferred
 from .shs_core.gateway_journal import AdmissionPending, ConfigurationPending, GatewayJournal, GatewayConflict, digest
 from .shs_core.gateway_service import GatewayService, AppConnection
+from .shs_core.ev_charge_override import EvChargeOverride
 from .shs_core.heating_overrides import (HeatingOverrides, active_heating, heating_binding,
     heating_members, relay_heat, room_temperature)
 from .shs_core.gateway_stream import GatewayCommands, GatewayOperations, GatewayRecord, GatewayStream
@@ -861,6 +862,8 @@ class HomeAssistantSource:
                 # current mapping just as scheduled device execution does.
                 options = self.options()
                 mappings = options.get('device_control_mappings', {})
+            if entity == options.get('ev_target_soc_entity'):
+                return None  # The car's charge limit draws nothing.
             switch = options['ev_charge_switch_entity']
             ev = [(key,m) for key,m in mappings.items() if m.get('control_type') == 'variable_power'
                   and m.get('control_entity_id') and (not record or m.get('control_entity_id') in record['originals'])]
@@ -2311,6 +2314,7 @@ async def open_gateway(hass, entry):
     source = HomeAssistantSource(hass, entry)
     service = GatewayService(stream, identity, source)
     service.heating = HeatingOverrides(GatewayRecord(stream, 'heating_overrides'), service.heating_changed)
+    service.ev_override = EvChargeOverride(GatewayRecord(stream, 'ev_charge_override'), service.heating_changed)
     source.service = service
     source.configuration = ExecutionConfiguration(GatewayRecord(stream,'execution_configuration'),
         source.invalidate, source.capture_configuration)
@@ -2328,6 +2332,7 @@ async def open_gateway(hass, entry):
         authorize=service.authorize_device, before_external=source.external_ready,
         operations=GatewayOperations(stream, service.session), capacity=source, heating=service.heating,
         configuration_pending=service.admission_pending, control_notices=source.control_notices)
+    service.physical.ev_override = service.ev_override
     now = lambda:int(datetime.now(timezone.utc).timestamp()*1000)
     service.battery = BatteryGateway(stream,service.physical,source.options,source.report,now,
         authorize=service.authorize,session=service.session,context=service.context, coordinate=source.coordinate_battery,
@@ -2335,6 +2340,7 @@ async def open_gateway(hass, entry):
     try:
         await source.configuration.load(dict(entry.options))
         await service.heating.load(source.options())
+        await service.ev_override.load()
         admission = await stream.call('load_record','source_admission')
         if admission is not None:
             source.install_bindings(admission)

@@ -152,11 +152,20 @@
       },
       "heating_minutes": {
         "name": "Override time"
+      },
+      "ev_override_target": {
+        "name": "Charge target"
+      },
+      "ev_override_hours": {
+        "name": "Hours to charge target"
       }
     },
     "button": {
       "heating_resume": {
         "name": "Return to plan"
+      },
+      "ev_override_end": {
+        "name": "End charge override"
       }
     },
     "sensor": {

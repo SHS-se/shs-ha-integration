@@ -70,6 +70,20 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         executor.transport.journal.capacity = self.source
         executor.read_state = lambda entity:SimpleNamespace(**self.rows[entity])
 
+    async def test_the_cars_charge_limit_adds_no_import_even_when_the_house_is_full(self):
+        # docs/ev-charge-override.md: the override may raise and restore the
+        # car's own charge limit, which draws nothing.
+        self.configure_ev()
+        options = self.source.options()
+        options['ev_target_soc_entity'] = 'number.limit'
+        self.source.configuration.options = lambda:deepcopy(options)
+        self.rows['number.limit'] = {'state':'80', 'attributes':{'unit_of_measurement':'%', 'min':50, 'max':100, 'step':1}}
+        self.rows['switch.ev']['state'] = 'on'
+        self.rows['sensor.house']['state'] = '19000'
+        self.assertIsNone(self.source.describe_import('ev', 'number.limit', 90))
+        self.source.check_command(Command('limit', 'controller', 'ev', 'plan',
+                                          NativeAction('number.limit', 'set_value', 90)))
+
     async def test_car_cannot_start_when_house_load_leaves_insufficient_capacity(self):
         self.configure_ev()
         self.rows['sensor.house']['state'] = '9000'

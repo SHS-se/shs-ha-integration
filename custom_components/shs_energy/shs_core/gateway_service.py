@@ -35,6 +35,7 @@ class GatewayService:
         self.physical = None
         self.battery = None
         self.heating = None
+        self.ev_override = None
         self.reconciliation = None
         self.pending = {}
         self.projection = None
@@ -150,6 +151,48 @@ class GatewayService:
         distinct = {value for value in values if value is not None}
         return next(iter(distinct)) if len(distinct) == 1 else None
 
+    def ev_override_inputs(self):
+        """Readings the charge override controls show and edit against."""
+        from .ev_charge_override import capacity_kwh, charge_need_kwh, efficiency, fastest_hours
+
+        def number(entity):
+            report = self.source.report(entity) if entity else None
+            try:
+                value = float(report['state'])
+            except (TypeError, ValueError, KeyError):
+                return None
+            unit = report['attributes'].get('unit_of_measurement')
+            return value / 100 if unit == '%' else value
+
+        options = self.source.options()
+        soc = number(options.get('ev_soc_entity'))
+        remaining = options.get('ev_energy_remaining_entity')
+        size = capacity_kwh(soc, number(remaining) if remaining else None)
+        record = (self.physical.ownership.records.get('ev') or {}) if self.physical is not None else {}
+        maxima = {float(m['maximum_value']) for m in options.get('device_control_mappings', {}).values()
+                  if m.get('control_type') == 'variable_power' and type(m.get('maximum_value')) in (int, float)
+                  and m['maximum_value'] > 0
+                  and (not record or m.get('control_entity_id') in record.get('originals', {}))}
+        maximum_a = maxima.pop() if len(maxima) == 1 else None
+
+        def need(target):
+            if soc is None or size is None:
+                return 0.0
+            return charge_need_kwh(soc, target, size, efficiency(options))
+
+        def fastest(target):
+            return fastest_hours(need(target), maximum_a) if maximum_a else 0
+        return dict(options=options, soc=soc, need=need, fastest=fastest, maximum_a=maximum_a)
+
+    async def change_ev_override(self, field, value):
+        if not self.active or self.closed:
+            raise AdmissionPending('SHS is reconnecting')
+        readings = self.ev_override_inputs()
+        if readings['soc'] is None or readings['maximum_a'] is None:
+            raise ValueError("The car's charge level or charger current range is not available")
+        return await self.ev_override.change(field, value, soc=readings['soc'], need_kwh=readings['need'],
+            maximum_a=readings['maximum_a'], options=readings['options'])
+
     async def change_heating(self, body):
         if not self.active or self.closed:
             raise AdmissionPending('SHS is reconnecting')
@@ -239,6 +282,8 @@ class GatewayService:
         self.configuration_revision = await self.stream.capture('configuration', value)
         if self.heating is not None:
             await self.heating.retire(self.source.options())
+        if self.ev_override is not None:
+            await self.ev_override.retire(self.source.options())
         self.configuration_pending = False
 
     def invalidate_configuration(self):

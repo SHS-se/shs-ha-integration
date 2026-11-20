@@ -25,6 +25,7 @@ from .hot_water import is_hot_water, heating_permission, hot_water_setup_errors,
 from .device_controls import device_planning_path, pool_control_errors, pool_control_mapping, planning_path
 from .device_controls import pool_requested_w, pool_permission
 from .heating_overrides import heating_binding, relay_heat, room_temperature
+from .ev_charge_override import capacity_kwh, charge_need_kwh, efficiency, override_current
 
 _LOGGER = logging.getLogger(__name__)
 DEVICES = ("battery", "ev", "pool")
@@ -90,6 +91,14 @@ class ControlCommandError(ValueError):
     """An attempted command did not receive its required physical confirmation."""
 
 
+def rounded_limit(target, attributes):
+    """The car's charge limit setting that covers the override target."""
+    step = finite(attributes.get("step", 1)) or 1
+    low, high = finite(attributes.get("min", 0)), finite(attributes.get("max", 100))
+    value = min(high, max(low, -(-target // step) * step))
+    return int(value) if float(value).is_integer() else value
+
+
 def correction_details(error):
     if isinstance(error, (HotWaterConfigurationError, GridCapacityConfigurationError)):
         return {"fix": error.fix, "next_step": error.next_step}
@@ -139,6 +148,8 @@ class DeviceOperations:
     execution_plan() supplies an already admitted device request; check_authority()
     validates its host/session before each physical effect.
     """
+    # The HA gateway's manual EV charge override store (ev_charge_override.py).
+    ev_override = None
 
     def make_command(self, identity, phase, action):
         return Command(identity, 'controller', self.device, phase, action)
@@ -194,6 +205,8 @@ class DeviceOperations:
         if self.device == 'ev':
             record = self.ownership.records.get('ev')
             options = record['options'] if self.restoring and record else self.options()
+            if entity == options.get('ev_target_soc_entity'):
+                return False  # The car's charge limit draws nothing.
             switch = options.get('ev_charge_switch_entity')
             if entity != switch and self.actuator_state(switch).state == 'off':
                 return False
@@ -437,7 +450,15 @@ class DeviceOperations:
             raise ControlPlanError("planned EV current exceeds its slot envelope")
         self.check_targets("ev", [entity, switch])
         await self.capture("ev", options, [entity, switch])
-        if current == 0 or connected in ("off", "false", "disconnected") or soc >= target_soc:
+        disconnected = connected in ("off", "false", "disconnected")
+        forced = await self.ev_charge_override(options, soc, disconnected, low, high)
+        if forced is not None:
+            # The override is a floor on the plan, within the charger's reviewed range.
+            current = max(current, forced["current_a"])
+            slot_minimum, slot_maximum = low, high
+            target_soc = forced["target_soc"]
+            slot = {**slot, "spare_house_w": None}
+        if current == 0 or disconnected or soc >= target_soc:
             await self.clear_outside_stop("ev")
             reason = ("plan requests charging off" if current == 0 else
                       "vehicle disconnected" if connected in ("off", "false", "disconnected") else
@@ -448,8 +469,13 @@ class DeviceOperations:
                         if connected in ("off", "false", "disconnected") and soc < target_soc else None),
                     "reason": "off slot, disconnected, or charge target reached",
                     "decision": {"kind": "ev", "charging": False, "current_a": 0, "reason": reason}}
+        if forced is not None and (stopped := self.outside_stop_started("ev")) and forced["started_at"] > stopped:
+            # Setting an override is an explicit request to charge now.
+            await self.clear_outside_stop("ev")
         resumes = await self.outside_stop_pause("ev", switch)
         if resumes is not None:
+            if forced is not None:
+                await self.end_ev_charge_override(options)
             return {"state": "stopped", "requested_current_a": current,
                     "reason": ("Charging was stopped outside SHS. Planned charging resumes "
                                "after a minute unless the car is unplugged."),
@@ -478,6 +504,15 @@ class DeviceOperations:
                     'reason': 'House import capacity is below the minimum charging current.',
                     'decision': {'kind': 'ev', 'charging': False, 'current_a': 0}}
         await self.command(entity, admitted)
+        if forced is not None:
+            await self.command(switch, "on")
+            result = {"state": "commanded" if admitted >= current else "limited",
+                      "requested_current_a": admitted, "reason": forced["reason"],
+                      "charge_override": forced["row"],
+                      "decision": {"kind": "ev", "charging": True, "current_a": admitted}}
+            if admitted < current:
+                result["reason"] += f" House import capacity allows {admitted:g} A for now."
+            return result
         if admitted > current:
             return {"state": "commanded", "requested_current_a": admitted,
                     "reason": f"Using spare house capacity at {admitted:g} A. The plan requests {current:g} A.",
@@ -540,6 +575,68 @@ class DeviceOperations:
         resumes = datetime.fromisoformat(until)
         self.device_deadline("outside_stop", resumes)
         return resumes
+
+    def outside_stop_started(self, device):
+        record = self.ownership.records.get(device) or {}
+        until = record.get("outside_stop_until")
+        if until is None:
+            return ""
+        return (datetime.fromisoformat(until) - timedelta(seconds=OUTSIDE_STOP_PAUSE_SECONDS)).isoformat()
+
+    async def ev_charge_override(self, options, soc, disconnected, low, high):
+        """The manual override's current, or None once it has ended or is absent.
+
+        See docs/ev-charge-override.md. The override only adds charging: it
+        never writes a setting while the device is not Controlling, and the
+        charge limit it raised is the only setting it hands back.
+        """
+        store = getattr(self, "ev_override", None)
+        if store is None or self.verifying or store.active is None:
+            return None
+        row = store.active
+        target = row["target_soc"] / 100
+        if row.get("ending") or disconnected or soc >= target:
+            await self.end_ev_charge_override(options)
+            return None
+        limit_entity = options.get("ev_target_soc_entity")
+        if (limit_entity and limit_entity.startswith("number.") and row.get("raised_limit") is None
+                and self.fraction(limit_entity) < target):
+            limit = self.actuator_state(limit_entity)
+            saved = finite(limit.state)
+            saved = int(saved) if saved.is_integer() else saved
+            raised = rounded_limit(row["target_soc"], limit.attributes)
+            await self.command(limit_entity, raised)
+            await store.record_limit(saved, raised)
+        remaining = options.get("ev_energy_remaining_entity")
+        size = capacity_kwh(soc, finite(self.state(remaining).state) if remaining else None)
+        now = datetime.now(timezone.utc)
+        deadline = store.deadline()
+        if size is None:
+            current, need = high, None
+        else:
+            need = charge_need_kwh(soc, target, size, efficiency(options))
+            current = override_current(need, deadline, now, low, high)
+        self.device_deadline("charge_override", now + timedelta(minutes=5))
+        by = f" by {deadline.isoformat(timespec='minutes')}" if deadline else " as fast as possible"
+        return {"current_a": current, "target_soc": target, "started_at": row["started_at"],
+                "row": {**row, "need_kwh": need},
+                "reason": f"Charge override to {row['target_soc']:g}%{by}."}
+
+    async def end_ev_charge_override(self, options):
+        """Hand back the charge limit only if the car still reports what SHS set."""
+        store = self.ev_override
+        row = store.active
+        limit_entity = options.get("ev_target_soc_entity")
+        if row and row.get("raised_limit") is not None and limit_entity:
+            state = self.state(limit_entity)
+            try:
+                unchanged = abs(finite(state.state) - row["raised_limit"]) < 1e-6
+            except (TypeError, ValueError):
+                unchanged = False
+            if unchanged:
+                await self.command(limit_entity, row["saved_limit"])
+        await store.clear()
+        self.device_deadline("charge_override", None)
 
     async def clear_outside_stop(self, device):
         record = self.ownership.records.get(device)

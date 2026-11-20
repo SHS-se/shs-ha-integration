@@ -25,7 +25,7 @@ PHYSICAL_RECORDS = frozenset({
     'ownership', 'battery_writer', 'physical', 'battery_obligation',
     'execution_configuration', 'entity_catalogue', 'source_admission',
     'house_import_limit', 'grid_capacity', 'power_peaks', 'heating_overrides',
-    'run_progress',
+    'run_progress', 'ev_charge_override',
 })
 _LOGGER = logging.getLogger(__name__)
 _PACKED_TABLES = {

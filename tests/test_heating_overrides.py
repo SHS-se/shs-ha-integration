@@ -292,6 +292,7 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
         heating = load_adapter('heating_entities.py', {'callback': lambda fn: fn,
             'equipment_device_info': equipment.equipment_device_info})
         number = load_adapter('number.py', {'HeatingEntity': heating.HeatingEntity, 'NumberEntity': object,
+                                            'EvOverrideEntity': type('EvOverrideEntity', (), {}),
             'NumberDeviceClass': SimpleNamespace(TEMPERATURE='temperature', DURATION='duration'),
             'NumberMode': SimpleNamespace(BOX='box')})
         entry = SimpleNamespace(entry_id='home', data={'device_token_id': 'token'},

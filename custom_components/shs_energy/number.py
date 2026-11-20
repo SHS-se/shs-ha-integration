@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from homeassistant.components.number import NumberDeviceClass, NumberEntity, NumberMode
 
 from .heating_entities import HeatingEntity, setup_heating_entities
+from .ev_override_entities import EvOverrideEntity, setup_ev_override_entities
 
 
 class HeatingNumber(HeatingEntity, NumberEntity):
@@ -56,6 +57,34 @@ class HeatingNumber(HeatingEntity, NumberEntity):
         await self.change(value)
 
 
+class EvOverrideNumber(EvOverrideEntity, NumberEntity):
+    """Charge target (%) or hours to reach it; both track the car while idle."""
+    _attr_mode = NumberMode.BOX
+    _attr_native_step = 1
+
+    def __init__(self, entry, field):
+        super().__init__(entry, field)
+        if field == 'target':
+            self._attr_device_class = NumberDeviceClass.BATTERY
+            self._attr_native_unit_of_measurement = '%'
+            self._attr_native_min_value, self._attr_native_max_value = 0, 100
+        else:
+            self._attr_device_class = NumberDeviceClass.DURATION
+            self._attr_native_unit_of_measurement = 'h'
+            self._attr_native_min_value, self._attr_native_max_value = 0, 10_000
+
+    @property
+    def native_value(self):
+        if not self.available:
+            return None
+        return self.display_target() if self.field == 'target' else self.display_hours()
+
+    async def async_set_native_value(self, value):
+        await self.change(value)
+
+
 async def async_setup_entry(hass, entry, async_add_entities):
     await setup_heating_entities(hass, entry, lambda entry, owner, row: [
         HeatingNumber(entry, owner, row, field) for field in ('target', 'minutes')])
+    await setup_ev_override_entities(hass, entry, lambda entry: [
+        EvOverrideNumber(entry, field) for field in ('target', 'hours')], async_add_entities)

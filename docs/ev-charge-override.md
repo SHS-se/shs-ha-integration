@@ -1,6 +1,16 @@
 # EV charge override
 
-User requirement, 20 November 2026. Not yet implemented.
+User requirement, 20 November 2026.
+
+Implementation status: the controls, the stored override, the charge rate,
+slowing down under the house import limit, the charge-limit raise and
+restore, and every ending below are implemented
+(`shs_core/ev_charge_override.py`, `DeviceOperations.ev_charge_override`).
+Not yet implemented: cutting other loads once full power is needed, the
+newest-wins rule against room overrides, stopping battery grid charging for
+the car, and reporting the saved limit to the planner during an override.
+Until then the override takes whatever capacity the existing live priority
+leaves the car.
 
 A manual override that charges the car to a chosen state of charge within a
 chosen number of hours, the way a room heating override sets a temperature for
@@ -88,7 +98,12 @@ to the plan, when:
   the car's screen or another automation;
 - the car is unplugged;
 - the user ends it with an end-override button;
-- the device leaves Controlling, is excluded or is manually overridden.
+- the device leaves Controlling or is excluded. This
+  ending writes nothing, so a raised charge limit stays as it is: leaving
+  Controlling stops control at the current settings
+  ([control continuity](control-continuity.md)).
+  While the charger's manual-override entity is on, SHS sends nothing and the
+  override waits.
 
 A missed deadline does not end it: the countdown reaches the floor and the car
 charges at full power until the target is reached.
