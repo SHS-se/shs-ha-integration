@@ -852,6 +852,91 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.evaluations_following_the_switch(), [('off', 5)] + [('on', 5)] * 5)
         self.assertLess(self.source.priority_last['granted']['battery'], 2530, 'The battery yields to the car')
 
+    # 20 November 2026, 06:05: the car's current hunted between 10 and 13 A.
+    # The 5 s grid meter moved before the car's meter (25-60 s) and Tessie's
+    # readback (about 40 s), and the lagging readback was rewritten every poll.
+
+    def car_charging_at_12_of_14(self):
+        self.executable_ev(self.car_run(hours=.5, planned_w=9660))['parameters']['current_a'] = 14
+        self.rows['number.ev']['state'] = '12'
+        self.rows['sensor.ev']['state'] = '8280'
+        self.receipts = {}
+
+    def car_reports(self, **states):
+        """Readings arriving after dispatch, settled as the gateway journal does."""
+        ordinal = max([self.source.capacity['revision'] + 100, *self.receipts.values()]) + 1
+        for key, state in states.items():
+            entity = {'readback':'number.ev', 'meter':'sensor.ev'}[key]
+            self.rows[entity]['state'] = state
+            self.receipts[entity] = ordinal
+            ordinal += 1
+        observe_capacity(self.source.capacity, ordinal,
+                         lambda entity:(self.receipts.get(entity, 0), self.rows.get(entity)))
+
+    async def car_current(self):
+        return await self.source.limit_ev_current('number.ev', 'switch.ev', 14, 5)
+
+    async def test_car_current_is_not_raised_again_while_its_reduction_lands(self):
+        self.car_charging_at_12_of_14()
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '15560'
+        self.assertEqual(await self.car_current(), 11, 'An overload is relieved at once')
+        await self.native('lower', 'ev', 'number.ev', 'set_value', 11.0)
+        # The car applies it: the grid meter falls 690 W, and the house load
+        # with it, but the car's meter and readback still show 12 A.
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '13600'
+        self.assertEqual(await self.car_current(), 11, 'Previously raised to 14 A on the stale car meter')
+        self.assertEqual(self.source.ev_spare_current('number.ev', 'switch.ev', 11, 16, 15000), 11,
+                         'No boost while the change lands')
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '15700'
+        self.assertEqual(await self.car_current(), 10, 'A further overload still reduces it')
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '13600'
+        self.car_reports(readback='11')
+        self.assertEqual(await self.car_current(), 11, 'Acknowledged, but the meter has not reported since')
+        self.car_reports(meter='7590')
+        self.assertIsNone(self.source.ev_change_in_flight('ev@number.ev,switch.ev'))
+        self.assertEqual(await self.car_current(), 13, 'Settled: capacity measurably free is used again')
+
+    async def test_car_increase_is_not_taken_back_by_its_own_ramp(self):
+        self.car_charging_at_12_of_14()
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '13600'
+        self.assertEqual(await self.car_current(), 14)
+        await self.native('raise', 'ev', 'number.ev', 'set_value', 14.0)
+        # The grid meter shows the car ramping before its own meter does.
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '14980'
+        self.assertEqual(await self.car_current(), 14, 'Its own ramp is not new house load')
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '15800'
+        self.assertEqual(await self.car_current(), 12, 'Load beyond its own ramp still reduces it')
+
+    async def test_lagging_readback_is_not_rewritten_until_acknowledged_or_the_response_window(self):
+        from shs_core.run_priority import RESPONSE_MS
+        self.car_charging_at_12_of_14()
+        await self.native('lower', 'ev', 'number.ev', 'set_value', 10.0)
+        executor = self.physical.native_executor
+        self.car_reports(readback='12')
+        self.assertTrue(executor.command_in_flight('number.ev', 10.0), 'Tessie still reports 12 A from before the write')
+        self.assertFalse(executor.command_in_flight('number.ev', 11.0), 'A different setting is a new command')
+        self.assertFalse(executor.command_in_flight('switch.ev', 'on'))
+        self.car_reports(readback='10')
+        self.car_reports(readback='12')
+        self.assertFalse(executor.command_in_flight('number.ev', 10.0), 'After acknowledgement 12 A is a change to switch back')
+
+        await self.native('again', 'ev', 'number.ev', 'set_value', 9.0)
+        effect = self.source.ev_change_in_flight('ev@number.ev,switch.ev')
+        self.assertTrue(executor.command_in_flight('number.ev', 9.0))
+        effect['dispatched_ms'] -= RESPONSE_MS
+        self.assertFalse(executor.command_in_flight('number.ev', 9.0), 'Unanswered after 60 s, it is asked again')
+
+    async def test_priority_granted_increase_is_admitted_beside_a_shared_heater(self):
+        # Priority funded 13 A from measured capacity; the final check also
+        # reserved the room's full peak and refused it, while reductions passed.
+        self.executable_ev(self.car_run(hours=.5))['parameters']['current_a'] = 14
+        self.scheduled_room(temperature=21.5)
+        self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '12500'
+        self.assertEqual(await self.car_current(), 13)
+        self.assertTrue(self.source.external_ready('ev', entity='number.ev', value=13.0, require_battery_release=False))
+        with self.assertRaisesRegex(ControlDeadlineError, 'house import capacity'):
+            self.source.external_ready('ev', entity='number.ev', value=15.0, require_battery_release=False)
+
     async def test_restored_power_needs_measurably_free_capacity(self):
         # The room outranks the car, but the car's reduction is still in
         # flight: its measured draw has not fallen, so the room keeps waiting.

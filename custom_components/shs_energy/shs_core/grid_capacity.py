@@ -141,12 +141,15 @@ def prepare_capacity(capacity, command_id, effect, through):
     capacity['revision'] += 1
 
 
-def dispatch_capacity(capacity, command_id, through):
+def dispatch_capacity(capacity, command_id, through, at_ms=None):
     for row in capacity['devices'].values():
         effect = row['effects'].get(command_id)
         if effect is not None:
             effect['dispatch_through'] = through
             effect['witnessed'] = None
+            effect.pop('acknowledged', None)
+            if at_ms is not None:
+                effect['dispatched_ms'] = at_ms
             capacity['revision'] += 1
             return
 
@@ -238,6 +241,10 @@ def observe_capacity(capacity, ordinal, latest):
             acknowledgement, actuator = latest(effect['changed'])
             if acknowledgement <= fence:
                 continue
+            if effect.get('acknowledged') is None:
+                # The control has reported the commanded value since dispatch.
+                effect['acknowledged'] = acknowledgement
+                changed = True
             sensor = effect['sensor']
             if not sensor and effect.get('logical') in ('ev','battery'):
                 continue

@@ -210,6 +210,11 @@ class DeviceOperations:
         value, equal = native.value, native.equal
         if equal and not self.verifying and self.native_executor.requires_command(entity, value):
             equal = False
+        in_flight = getattr(self.native_executor, 'command_in_flight', None)
+        if not equal and not self.verifying and in_flight is not None and in_flight(entity, value):
+            # The control still reports its value from before this write
+            # (Tessie lags about 40 s). Re-sending it is not a correction.
+            equal = True
         _, service, service_data = native.action.service_call()
         data = {key: item for key, item in service_data.items() if key != "entity_id"}
         now = datetime.now(timezone.utc)

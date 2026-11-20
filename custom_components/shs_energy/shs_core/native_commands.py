@@ -84,6 +84,11 @@ class NativeExecutor:
     def requires_command(self, entity, value):
         return self.capacity is not None and self.capacity.requires_command(entity, value)
 
+    def command_in_flight(self, entity, value):
+        """A write of this value that the control has not reported yet."""
+        check = getattr(self.capacity, 'command_in_flight', None)
+        return check is not None and check(entity, value)
+
     async def execute(self, command, *, authorize, timeout, on_sent=lambda: None):
         from .command_transport import CommandNotSent
 

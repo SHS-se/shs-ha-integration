@@ -16,3 +16,11 @@ For a pool already controlled successfully, an unknown/unavailable water-tempera
 Missing actuators, changed authority or requests, malformed/stale measurements and failures after a write attempt do not qualify. Verification runs do not establish this live-control evidence. The native thermostat retains its accepted band during the bounded gap.
 
 Tests exercise the actual controller against fake Home Assistant services. They do not demonstrate inverter or heat-pump response. Commission the battery alone under supervision first; verify mode, both power limits, actual flow, SOC protection and handover before unattended operation or adding the pool.
+
+## Car charging stability — 20 November 2026
+
+The car was switched on and off every few seconds, and its current hunted
+between 10 and 13 A. A start counting on commanded battery charge is now
+decided by live priority, as the running car is. A car current change counts
+as in flight until it is settled, and is not raised again or rewritten while it
+lands. See [live priority](run-priority.md#sharing-the-import-limit).

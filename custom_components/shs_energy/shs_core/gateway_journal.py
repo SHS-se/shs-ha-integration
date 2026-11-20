@@ -664,7 +664,7 @@ class GatewayJournal:
             self._owner(db)
             capacity = self._capacity(db)
             through = db.execute('SELECT high FROM transport').fetchone()[0]
-            dispatch_capacity(capacity, command_id, through)
+            dispatch_capacity(capacity, command_id, through, now_ms())
             self._save_capacity(db, capacity)
 
     def finish_command(self, command, status, reason=None):

@@ -48,6 +48,19 @@ heater on or off). The same calculation restores power as capacity returns.
 
 - Sizing is absolute, so a meter that has not caught up cannot ratchet a
   setting, and a command in flight needs no second adjustment.
+- A car current change is in flight until the capacity journal settles it:
+  the car reports the setting and its meter reports afterwards. Meanwhile the
+  car holds the greater of that setting and its measured draw, against the
+  grid meter too, and is not raised again (boosts included). Reductions for
+  more load still apply at once. Until the car reports a sent current, for up
+  to the 60-second response window, the old readback is not a change to
+  rewrite; once it has reported, a different value is switched back as
+  before. A running car's increase within its live share is admitted by that
+  share, not refused by the whole-house check that also reserves the peaks
+  of the heaters it was shared with. On 20 November 2026 the 5 s grid meter
+  moved before the car's meter (25–60 s) and Tessie's readback (about 40 s),
+  the readback was rewritten every poll, and the current hunted between 10
+  and 13 A.
 - An increase is funded only by capacity that is measurably free. Until its
   meter shows the drop, a load still holds the greater of its setting and its
   measured draw. Pending starts stay reserved separately.

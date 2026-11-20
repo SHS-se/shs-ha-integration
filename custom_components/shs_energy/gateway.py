@@ -718,6 +718,40 @@ class HomeAssistantSource:
                 return True
         return False
 
+    @staticmethod
+    def _latest_dispatched(row):
+        return max((effect for effect in row.get('effects', {}).values() if effect.get('dispatch_through') is not None),
+                   key=lambda effect:effect['order'], default=None)
+
+    def ev_change_in_flight(self, identity):
+        """The car's last sent change until its control and meter confirm it.
+
+        The capacity journal settles a change once the control reports it and
+        the car's meter reports afterwards. Until then neither the setting nor
+        the meter shows what the car draws (Tessie lags about 40 seconds).
+        """
+        effect = self._latest_dispatched(self.capacity['devices'].get(identity, {}))
+        return effect if effect is not None and effect.get('status') == 'service_returned' else None
+
+    def command_in_flight(self, entity, value):
+        """A car current SHS sent moments ago that the car has not reported yet."""
+        now = datetime.now(timezone.utc).timestamp() * 1000
+        for row in self.capacity['devices'].values():
+            effect = self._latest_dispatched(row)
+            if (effect is None or effect.get('logical') != 'ev' or effect['changed'] != entity
+                    or effect.get('status') != 'service_returned' or effect.get('acknowledged') is not None
+                    or effect.get('dispatched_ms') is None or now - effect['dispatched_ms'] >= run_priority.RESPONSE_MS):
+                continue
+            # After the equipment response window it is asked again.
+            sent = effect['controls'].get(entity)
+            try:
+                if float(sent) == float(value):
+                    return True
+            except (TypeError, ValueError):
+                if sent == value:
+                    return True
+        return False
+
     def lowers_heating_target(self, entity, value):
         state = self.report(entity)
         if not state or state['state'] != 'heat':
@@ -1041,12 +1075,21 @@ class HomeAssistantSource:
         # A car about to start is sized as it will be once its switch is on,
         # holding its setting, so the start and the running share agree.
         present = effect['after_w'] if own.get('starting') else effect['before_w']
+        # While its last change lands, the car holds the greater of that
+        # setting and its measured draw, also against the grid meter, and is
+        # not raised again. Otherwise the 5 s grid meter moving before the
+        # car's meter and readback reads as capacity freed or taken, and the
+        # current hunts (20 November 2026). Reductions still apply at once.
+        flight = self.ev_change_in_flight(effect['device'])
+        held = None if flight is None else flight['after_w']
         candidate = dict(owner='ev', kind='ev', identity=effect['device'], draw_w=draw, metered=True,
             want_w=wanted * EV_WATTS_PER_AMP, step_w=step * EV_WATTS_PER_AMP,
             scheduled_w=own['requested'] * EV_WATTS_PER_AMP,
-            floor_w=own['minimum'] * EV_WATTS_PER_AMP, present_w=present,
+            floor_w=own['minimum'] * EV_WATTS_PER_AMP, present_w=present if held is None else max(present, held),
             sources=(effect['sensor'], entity, switch),
-            key=('ev', native['state'], self.report(switch)['state'], draw, own['requested'], own['minimum'], own.get('maximum')))
+            key=('ev', native['state'], self.report(switch)['state'], draw, own['requested'], own['minimum'], own.get('maximum'), held))
+        if held is not None:
+            candidate.update(held_w=held, budget_draw_w=max(draw, held))
         if run is not None:
             # Only SHS's own reductions build a shortfall. A car that takes
             # less than an untrimmed setting allows is limiting itself.
@@ -1192,7 +1235,7 @@ class HomeAssistantSource:
         else:
             reserved = self.import_required(exclude_devices=[candidate['identity'] for candidate in candidates],
                 reserved=[*self.heating_effects().values(), *claims],
-                house_w=max(0.0, house - sum(c['draw_w'] for c in candidates if c['metered'])))
+                house_w=max(0.0, house - sum(c.get('budget_draw_w', c['draw_w']) for c in candidates if c['metered'])))
             reserved -= self.discharge_credit(import_after_w=reserved + sum(c['want_w'] for c in candidates))
             self.priority_cache = (key, reserved)
             self.priority_passes += 1
@@ -1200,7 +1243,7 @@ class HomeAssistantSource:
         if grid is not None:
             # The grid meter also catches demand ahead of the gross-house
             # reading. Neither meter replaces the other.
-            other = max(other, grid - sum(c['draw_w'] for c in candidates))
+            other = max(other, grid - sum(c.get('budget_draw_w', c['draw_w']) for c in candidates))
         budget = limit - other
 
         # Recovery capacity the plan leaves unused is spent once across runs.
@@ -1244,6 +1287,8 @@ class HomeAssistantSource:
                 share = run_priority.step_down(max(candidate['present_w'], min(share, room)), candidate['step_w'])
                 if share < candidate['floor_w']:
                     share = 0.0
+            if 'held_w' in candidate:
+                share = min(share, candidate['held_w'])
             granted[owner] = share
             ceiling = share
             if owner == 'battery' and 'outlook' in candidate:
@@ -1354,8 +1399,29 @@ class HomeAssistantSource:
             if reserved and effect and effect.get('logical') not in reserved:
                 # A valid room request keeps its place while other equipment reduces.
                 raise HeatingDeferred('Making room for a heating override')
+            if self.priority_grants_ev(effect):
+                return
             detail = f' after {credit:.0f} W battery discharge' if credit else ''
             raise ControlDeadlineError(f'Waiting for house import capacity: {required:.0f} W required{detail}, {limit:.0f} W house limit')
+
+    def priority_grants_ev(self, effect):
+        """A running car's current within its live-priority share is admitted.
+
+        The share already funds an increase only from measurably free capacity.
+        Reserving the full peaks of the heaters it was shared with as well
+        refused increases while reductions passed, so the setting ratcheted
+        (20 November 2026).
+        """
+        switch = self.options().get('ev_charge_switch_entity')
+        if (effect is None or effect.get('logical') != 'ev' or effect['changed'] == switch
+                or effect['controls'].get(switch) != 'on' or (self.report(switch) or {}).get('state') != 'on'):
+            return False
+        try:
+            decision = self.priority_pass()
+        except (ControlObservationError, ValueError, KeyError, TypeError):
+            return False  # The whole-house check decides without complete live evidence.
+        granted = (decision or {}).get('granted', {}).get('ev')
+        return granted is not None and effect['after_w'] <= granted + 1e-6
 
     def discharge_credit(self, effect=None, import_after_w=0.0):
         """AC battery supply admission credits, as the plan's grid balance does.
@@ -2084,7 +2150,8 @@ class HomeAssistantSource:
                 return scheduled
             effect = self.describe_import('ev', switch, 'on')
             identity, sensor = effect['device'], effect['sensor']
-            if hold_increase:
+            # A boost waits, like any increase, until the last change has landed.
+            if hold_increase or self.ev_change_in_flight(identity) is not None:
                 native = self.report(entity)
                 observed = float(canonical_metadata(native['state'], native['attributes']))
                 issued = commanded_controls(self.capacity, identity, issued_only=True)
