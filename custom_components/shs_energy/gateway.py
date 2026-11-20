@@ -742,7 +742,23 @@ class HomeAssistantSource:
             # response, its measured draw is what it draws (20 November 2026:
             # held at 5 A for minutes with capacity for 12 A).
             return None
+        if sent is not None and self.ev_draw_confirms(effect, sent):
+            # The meter shows the car drawing what it was sent: it has landed.
+            # A resend of the same current otherwise restarted this hold and
+            # pinned the car at 5 A (20 November 2026).
+            return None
         return effect
+
+    def ev_draw_confirms(self, effect, sent_ms):
+        """The car's meter, reported after the send, shows the sent current within one ampere."""
+        sensor = effect.get('sensor')
+        report = self.report(sensor) if sensor else None
+        try:
+            reported = datetime.fromisoformat(report['last_reported']).timestamp() * 1000
+            draw = self.measured_control_power(sensor)
+        except (ControlObservationError, ValueError, KeyError, TypeError):
+            return False
+        return reported > sent_ms and abs(draw - effect['after_w']) <= EV_WATTS_PER_AMP
 
     def command_in_flight(self, entity, value):
         """A car current SHS sent moments ago that the car has not reported yet."""
