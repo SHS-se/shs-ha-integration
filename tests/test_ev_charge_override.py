@@ -124,6 +124,21 @@ class OverrideTests(Continuity):
         self.assertEqual(self.calls, [('number.car_limit', 80), ('switch.charge', 'off')])
         self.assertIsNone(self.override.active)
 
+    async def test_the_car_stopping_one_point_short_of_the_target_is_reaching_it(self):
+        await self.controller.async_start()
+        await self.set('target', 90)
+        await self.controller.async_tick()
+        self.states['switch.charge'] = car_reports('on')
+        await self.controller.async_tick()
+        self.calls.clear()
+        self.states['sensor.ev_soc'] = State(89, unit_of_measurement='%')
+        self.states['switch.charge'] = car_reports('off')  # The car stopped itself.
+        await self.controller.async_tick()
+        self.assertIsNone(self.override.active)
+        self.assertEqual(self.calls, [('number.car_limit', 80)])
+        self.assertEqual(self.status()['decision']['reason'], 'charge override target reached')
+        self.assertNotIn('outside_stop_until', self.controller.ownership.records['ev'], 'no pause')
+
     async def test_a_limit_changed_elsewhere_is_left_as_it_is(self):
         await self.controller.async_start()
         await self.set('target', 90)

@@ -38,6 +38,8 @@ PAUSE_RESPONSE_SECONDS = 60
 OUTSIDE_STOP_PAUSE_SECONDS = 60
 # Tessie polls the car's own value for up to a minute after a write.
 EV_RESEND_SECONDS = 60
+# A Tesla often stops one percentage point short of its charge limit.
+CAR_STOP_SHORT = 0.01
 # Restarts and reconnects hide an entity for about a minute; longer needs attention.
 OBSERVATION_GRACE_SECONDS = 5 * 60
 
@@ -506,6 +508,18 @@ class DeviceOperations:
         if forced is not None and (stopped := self.outside_stop_started("ev")) and forced["started_at"] > stopped:
             # Setting an override is an explicit request to charge now.
             await self.clear_outside_stop("ev")
+        if (forced is not None and soc >= forced["target_soc"] - CAR_STOP_SHORT
+                and self.actuator_state(switch).state == "off"
+                and self.ownership.records["ev"].get("last_commands", {}).get(switch) == "on"):
+            # The car stopped itself at the limit SHS raised, often one point
+            # short of it: the target is reached, not stopped outside SHS.
+            await self.end_ev_charge_override(options)
+            await self.command(switch, "off")
+            await self.clear_outside_stop("ev")
+            return {"state": "stopped", "requested_current_a": 0,
+                    "reason": "The charge override reached its target; the car follows the plan again.",
+                    "decision": {"kind": "ev", "charging": False, "current_a": 0,
+                                 "reason": "charge override target reached"}}
         resumes = await self.outside_stop_pause("ev", switch)
         if resumes is not None:
             if forced is not None:
