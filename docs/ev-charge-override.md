@@ -84,12 +84,22 @@ to the plan, when:
 
 - the car reaches the target, or reports charging complete at it (Tesla often
   stops one point short);
+- charging stops without SHS commanding it, for example from the Tesla app,
+  the car's screen or another automation;
 - the car is unplugged;
 - the user ends it with an end-override button;
 - the device leaves Controlling, is excluded or is manually overridden.
 
 A missed deadline does not end it: the countdown reaches the floor and the car
 charges at full power until the target is reached.
+
+User requirement, 20 November 2026: the car cannot be unplugged while it is
+charging, so the override must never restart charging that was stopped outside
+SHS. Such a stop is detected as a genuine external change: the charge switch is
+available and off, and SHS did not command it off. It ends the override instead
+of being switched back. Stops SHS commands itself, such as slowing down below
+the charger's minimum current or a plan slot with no charging, never end the
+override. An unavailable switch is unknown and holds, as elsewhere.
 
 ## Durability
 
