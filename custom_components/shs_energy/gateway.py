@@ -69,6 +69,23 @@ def wire(value):
     return json_loads(json_bytes(value))
 
 
+def observed_current(native):
+    """The car's reported current, even outside the range it allows right now.
+
+    When a Tesla stops charging, Tessie lowers the allowed maximum (to 5 A)
+    while the reported setting stays at its last value. Validating that
+    reading against the new range faulted the charger at the end of every
+    charge above 5 A (20 November 2026). Commands are still range checked.
+    """
+    try:
+        return float(canonical_metadata(native['state'], native['attributes']))
+    except ValueError:
+        value = float(native['state'])
+        if not isfinite(value) or value < 0:
+            raise
+        return value
+
+
 class HomeAssistantSource:
     def __init__(self, hass, entry):
         self.hass, self.entry = hass, entry
@@ -904,7 +921,7 @@ class HomeAssistantSource:
                     'controls':{switch:'off'},'sensor':sensor}
             if self.report(current)['attributes'].get('unit_of_measurement') != 'A':
                 raise ValueError('EV current control must report amperes')
-            controls = {switch:self.report(switch)['state'], current:float(canonical_metadata(self.report(current)['state'],self.report(current)['attributes']))}
+            controls = {switch:self.report(switch)['state'], current:observed_current(self.report(current))}
             if controls[switch] not in ('on','off'):
                 raise ValueError('EV charging switch is unavailable for house import accounting')
             identity = capacity_key('ev', controls)
@@ -1101,7 +1118,7 @@ class HomeAssistantSource:
         native = self.report(entity)
         effect = self.describe_import('ev', switch, 'on')
         draw = self.measured_control_power(effect['sensor'])
-        observed = float(canonical_metadata(native['state'], native['attributes']))
+        observed = observed_current(native)
         issued = finite(commanded_controls(self.capacity, effect['device'], issued_only=True).get(entity, observed))
         # An issued boost belongs to the run until priority reclaims it.
         wanted = max(own['requested'], min(issued, own.get('maximum', issued)))
@@ -2217,7 +2234,7 @@ class HomeAssistantSource:
             # A boost waits, like any increase, until the last change has landed.
             if hold_increase or self.ev_change_in_flight(identity) is not None:
                 native = self.report(entity)
-                observed = float(canonical_metadata(native['state'], native['attributes']))
+                observed = observed_current(native)
                 issued = commanded_controls(self.capacity, identity, issued_only=True)
                 maximum = min(maximum, max(scheduled, finite(issued.get(entity, observed))))
             if identity in self.capacity.get('coordination', {}).get('caps', {}):
@@ -2243,7 +2260,7 @@ class HomeAssistantSource:
             if available <= scheduled:
                 return scheduled
             native = self.report(entity)
-            if available <= float(canonical_metadata(native['state'], native['attributes'])):
+            if available <= observed_current(native):
                 # The old charging envelope must remain reserved for other
                 # writers, but cannot force a small reduction down to nominal.
                 return available

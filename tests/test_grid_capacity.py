@@ -84,6 +84,14 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.source.check_command(Command('limit', 'controller', 'ev', 'plan',
                                           NativeAction('number.limit', 'set_value', 90)))
 
+    async def test_a_stopped_car_reporting_its_last_current_above_the_new_maximum_is_not_a_fault(self):
+        # 20 November 2026: after a charge at 16 A the Tesla lowered its
+        # allowed maximum to 5 A and still reported 16 A; the charger faulted.
+        self.configure_ev()
+        self.rows['number.ev'] = {'state':'16', 'attributes':{'unit_of_measurement':'A', 'min':0, 'max':5, 'step':1}}
+        effect = self.source.describe_import('ev', 'switch.ev', 'on')
+        self.assertEqual(effect['controls']['number.ev'], 16.0)
+
     async def test_car_cannot_start_when_house_load_leaves_insufficient_capacity(self):
         self.configure_ev()
         self.rows['sensor.house']['state'] = '9000'
