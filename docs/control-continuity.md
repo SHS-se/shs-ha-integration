@@ -66,8 +66,12 @@ after the minute, planned charging resumes. Each further stop made outside SHS
 starts another one-minute pause. The pause is journalled with the charger's
 ownership record, so a restart during it does not restart charging early. The
 pause is not a release: the captured baseline, ownership and every other rule
-here are unchanged, and a switch that has not yet reported charging after SHS's
-command (Tessie lags about 40 seconds) is still SHS's own command landing.
+here are unchanged. Tessie echoes SHS's switch-on before the call returns and
+writes the switch again only when it changes, so the car counts as charging once
+it reports on after that call returns, or once the switch turns off at least 30
+seconds after it. An off within those 30 seconds is still SHS's own command
+landing. On 20 November 2026 an outside stop 60 seconds after SHS started the
+car was switched back on 0.6 seconds later, because only a fresh report counted.
 
 To operate a device by hand, use what releases it: the select or a configured
 manual-override entity. This supersedes the earlier `overridden` latch, which

@@ -36,8 +36,13 @@ CONFIRM_SECONDS = 15
 PAUSE_RESPONSE_SECONDS = 60
 # A car cannot be unplugged while charging (user requirement, 20 November 2026).
 OUTSIDE_STOP_PAUSE_SECONDS = 60
-# Tessie showed a new current 116 s after the write (20 November 2026).
-EV_RESEND_SECONDS = 120
+# Tessie showed a new current 116 s after the write (20 November 2026). Within a
+# minute the same setting is not sent again; the car may also have dropped a
+# setting sent before it started, which this corrects after a minute.
+EV_RESEND_SECONDS = 60
+# A charging switch that turns off this long after SHS switched it on was on
+# in between: Tessie reports it only when it changes, never re-reports it.
+OUTSIDE_STOP_SETTLE_SECONDS = 30
 # A Tesla often stops one percentage point short of its charge limit.
 CAR_STOP_SHORT = 0.01
 # Restarts and reconnects hide an entity for about a minute; longer needs attention.
@@ -319,6 +324,13 @@ class DeviceOperations:
         returned = self.__dict__.get("returned_at", {}).get(entity)
         reported = getattr(state, "last_reported", None) or getattr(state, "last_updated", None)
         return returned is None or reported is None or reported > returned
+
+    def switched_off_after_landing(self, switch, reading):
+        """The switch changed to off well after SHS's switch-on returned, so it was on in between."""
+        returned = self.__dict__.get("returned_at", {}).get(switch)
+        changed = getattr(reading, "last_changed", None) or getattr(reading, "last_updated", None)
+        return (returned is not None and changed is not None
+                and changed - returned >= timedelta(seconds=OUTSIDE_STOP_SETTLE_SECONDS))
 
     def matches(self, entity, value):
         state = (self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity)
@@ -609,12 +621,12 @@ class DeviceOperations:
         elif until is not None:
             record.pop("outside_stop_until")
             until = None
-        elif commanded == "on" and record.get("charging_seen"):
+        elif commanded == "on" and (record.get("charging_seen") or self.switched_off_after_landing(switch, reading)):
             until = (now + timedelta(seconds=OUTSIDE_STOP_PAUSE_SECONDS)).isoformat()
             record["outside_stop_until"] = until
             # The switch is already off; SHS starts it again only after the pause.
             record["last_commands"][switch] = "off"
-            record.pop("charging_seen")
+            record.pop("charging_seen", None)
             _LOGGER.warning("%s was switched off outside SHS; planned charging pauses until %s", switch, until)
         else:
             record.pop("charging_seen", None)
@@ -669,7 +681,11 @@ class DeviceOperations:
             current = override_current(need, deadline, now, low, high)
         slack = override_slack_h(need, deadline, now, high)
         self.device_deadline("charge_override", now + timedelta(minutes=5))
-        by = f" by {deadline.isoformat(timespec='minutes')}" if deadline else " as fast as possible"
+        if deadline is None:
+            by = " as fast as possible"
+        else:
+            minutes = max(0, int((deadline - now).total_seconds() // 60))
+            by = f" within {minutes // 60} h {minutes % 60} min"
         return {"current_a": current, "target_soc": target, "started_at": row["started_at"],
                 "slack_h": slack, "row": {**row, "need_kwh": need},
                 "reason": f"Charge override to {row['target_soc']:g}%{by}."}

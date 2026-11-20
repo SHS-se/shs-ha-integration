@@ -67,7 +67,8 @@ heater on or off). The same calculation restores power as capacity returns.
   current never settled and the car stayed at 5 A with capacity for 12 A
   (20 November 2026). The car applied that change after about 64 s and
   Tessie showed it after 116 s.
-- The same car current is not sent again within two minutes of sending it.
+- The same car current is not sent again within a minute of sending it. The
+  car can drop a current sent before it starts charging, which this corrects.
   Tessie echoes a sent current before its service call returns, which settles
   the change at once, and then polls the car's older value. On 20 November
   2026 that sent the same 14 A every ten seconds while the car reported 16

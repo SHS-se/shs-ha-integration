@@ -100,6 +100,19 @@ class OutsideStopTests(Continuity):
         self.assertNotEqual(self.status()['decision'].get('reason'), 'charging stopped outside SHS', self.status())
         self.assertNotIn('outside_stop_until', self.controller.ownership.records['ev'])
 
+    async def test_a_stop_long_after_shs_switched_on_is_outside_even_without_a_fresh_report(self):
+        # 20 November 2026: Tessie wrote the switch only when it changed, so
+        # "on" was never re-reported and SHS switched an outside stop back on.
+        await self.controller.async_start()
+        self.assertIn(('switch.charge', 'on'), self.calls)
+        self.calls.clear()
+        later(self, 1)
+        stopped = car_reports('off')
+        self.states['switch.charge'] = stopped
+        await self.controller.async_tick()
+        self.assertEqual(self.calls, [], 'the stop is not switched back')
+        self.assertEqual(self.status()['decision']['reason'], 'charging stopped outside SHS')
+
     async def test_the_pause_survives_a_restart(self):
         await self.charging()
         self.states['switch.charge'] = State('off')
