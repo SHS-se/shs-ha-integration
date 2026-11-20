@@ -93,6 +93,16 @@ class OverrideTests(Continuity):
         self.assertIn('The car reports a limit of 5 A', self.status()['reason'])
         self.assertNotIn('House import', self.status()['reason'])
 
+    def test_the_car_current_is_raised_at_most_once_a_minute(self):
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        self.controller.ev_sends = {'number.current': (7.0, now - timedelta(seconds=10))}
+        self.controller.verifying = False
+        self.assertEqual(self.controller.ev_raise_held('number.current', 11.0), 7.0, 'no raise within a minute')
+        self.assertEqual(self.controller.ev_raise_held('number.current', 5.0), 5.0, 'a reduction applies at once')
+        self.controller.ev_sends = {'number.current': (7.0, now - timedelta(seconds=61))}
+        self.assertEqual(self.controller.ev_raise_held('number.current', 11.0), 11.0)
+
     async def test_preset_hours_spread_the_charge_but_not_below_the_minimum_current(self):
         await self.controller.async_start()
         await self.set('hours', 12)

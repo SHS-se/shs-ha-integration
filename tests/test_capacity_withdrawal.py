@@ -132,6 +132,11 @@ class WithdrawalCompositionTests(unittest.IsolatedAsyncioTestCase):
         self.rows['sensor.house']['state'] = str(self.base_w + 5 * 690)
         await self.record('sensor.house')
         self.assertEqual(await self.source.capacity_recoveries(), ['$ev'])
+        # 20 November 2026: the car's current is raised at most once a minute
+        # after it was sent, so the recovery comes a minute after the start.
+        from datetime import timedelta
+        self.owner.ev_sends = {entity: (value, at - timedelta(seconds=61))
+                               for entity, (value, at) in self.owner.ev_sends.items()}
         resumed = await self.owner.perform({**start, 'request_id':'full-capacity-returns'})
         self.assertIsNone(resumed['error'])
         self.assertEqual(float(self.rows['number.ev']['state']), 11)

@@ -314,6 +314,18 @@ class DeviceOperations:
         finally:
             command["completed_at"] = datetime.now(timezone.utc).isoformat()
 
+    def ev_raise_held(self, entity, admitted):
+        """Raise the car's current at most once a minute; reductions apply at once.
+
+        20 November 2026: as the car ramped up, the meters moved and SHS sent
+        7, 11, 12 and 11 A within 14 seconds.
+        """
+        sent = self.__dict__.get("ev_sends", {}).get(entity)
+        if (self.verifying or sent is None or admitted <= finite(sent[0])
+                or datetime.now(timezone.utc) - sent[1] >= timedelta(seconds=EV_RESEND_SECONDS)):
+            return admitted
+        return finite(sent[0])
+
     def recently_sent(self, entity, value):
         """The same car setting was sent within the equipment response window."""
         sent = self.__dict__.get("ev_sends", {}).get(entity)
@@ -577,6 +589,7 @@ class DeviceOperations:
         admitted = await self.ev_import_current(entity, switch, available, max(low, slot_minimum),
             maximum=min(high, slot_maximum), spare_house_w=slot.get('spare_house_w'),
             hold_spare_increase=slot.get('hold_spare_increase', False))
+        admitted = self.ev_raise_held(entity, admitted)
         if admitted == 0:
             # Zero is a charging pause, not necessarily a supported number
             # setting. Keep the scheduled target so meter events can resume it.
