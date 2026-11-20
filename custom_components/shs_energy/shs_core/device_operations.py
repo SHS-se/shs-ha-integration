@@ -32,6 +32,8 @@ CONFIRM_SECONDS = 15
 # A battery-powered Zigbee thermostat can take this long to act on a lower
 # setting. Until then a pause is not lowered a further step.
 PAUSE_RESPONSE_SECONDS = 60
+# A car cannot be unplugged while charging (user requirement, 20 November 2026).
+OUTSIDE_STOP_PAUSE_SECONDS = 60
 # Restarts and reconnects hide an entity for about a minute; longer needs attention.
 OBSERVATION_GRACE_SECONDS = 5 * 60
 
@@ -436,6 +438,7 @@ class DeviceOperations:
         self.check_targets("ev", [entity, switch])
         await self.capture("ev", options, [entity, switch])
         if current == 0 or connected in ("off", "false", "disconnected") or soc >= target_soc:
+            await self.clear_outside_stop("ev")
             reason = ("plan requests charging off" if current == 0 else
                       "vehicle disconnected" if connected in ("off", "false", "disconnected") else
                       "charge target reached")
@@ -445,6 +448,14 @@ class DeviceOperations:
                         if connected in ("off", "false", "disconnected") and soc < target_soc else None),
                     "reason": "off slot, disconnected, or charge target reached",
                     "decision": {"kind": "ev", "charging": False, "current_a": 0, "reason": reason}}
+        resumes = await self.outside_stop_pause("ev", switch)
+        if resumes is not None:
+            return {"state": "stopped", "requested_current_a": current,
+                    "reason": ("Charging was stopped outside SHS. Planned charging resumes "
+                               "after a minute unless the car is unplugged."),
+                    "resumes_at": resumes.isoformat(),
+                    "decision": {"kind": "ev", "charging": False, "current_a": 0,
+                                 "reason": "charging stopped outside SHS"}}
         native = self.actuator_state(entity).attributes
         available = current
         if current > finite(native["max"]):
@@ -484,6 +495,61 @@ class DeviceOperations:
         return {"state": "commanded", "requested_current_a": current,
                 "reason": "current and charge switch accepted; delivered power not inferred",
                 "decision": {"kind": "ev", "charging": True, "current_a": current}}
+
+    async def outside_stop_pause(self, device, switch):
+        """Pause planned charging for a minute after a stop made outside SHS.
+
+        A car cannot be unplugged while it is charging (user requirement,
+        20 November 2026), so switching such a stop straight back would trap
+        the cable. The pause is journalled; it is not a release. A switch that
+        has not reported charging since SHS switched it on is SHS's own command
+        still landing, never an outside stop.
+        """
+        if self.verifying:
+            return None
+        record = self.ownership.records[device]
+        state = self.actuator_state(switch).state
+        commanded = record.get("last_commands", {}).get(switch)
+        now = datetime.now(timezone.utc)
+        until = record.get("outside_stop_until")
+        before = (until, record.get("charging_seen"))
+        if state == "on":
+            record.pop("outside_stop_until", None)
+            until = None
+            if commanded == "on":
+                record["charging_seen"] = True
+        elif until is not None and now < datetime.fromisoformat(until):
+            pass
+        elif until is not None:
+            record.pop("outside_stop_until")
+            until = None
+        elif commanded == "on" and record.get("charging_seen"):
+            until = (now + timedelta(seconds=OUTSIDE_STOP_PAUSE_SECONDS)).isoformat()
+            record["outside_stop_until"] = until
+            # The switch is already off; SHS starts it again only after the pause.
+            record["last_commands"][switch] = "off"
+            record.pop("charging_seen")
+            _LOGGER.warning("%s was switched off outside SHS; planned charging pauses until %s", switch, until)
+        else:
+            record.pop("charging_seen", None)
+        if (until, record.get("charging_seen")) != before:
+            await self.save()
+        if until is None:
+            self.device_deadline("outside_stop", None)
+            return None
+        resumes = datetime.fromisoformat(until)
+        self.device_deadline("outside_stop", resumes)
+        return resumes
+
+    async def clear_outside_stop(self, device):
+        record = self.ownership.records.get(device)
+        if self.verifying or record is None:
+            return
+        if "outside_stop_until" in record or "charging_seen" in record:
+            record.pop("outside_stop_until", None)
+            record.pop("charging_seen", None)
+            await self.save()
+        self.device_deadline("outside_stop", None)
 
     def pool_temperature(self, entity, *, read_state=None):
         """Use the filtered temperature and validate availability of its raw source."""

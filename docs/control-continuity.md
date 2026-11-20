@@ -56,6 +56,19 @@ reverted entities as `reverted_external_change` on the device status with a
 warning in the log. For hot water, only heating SHS permitted may finish after
 an inhibition starts; heating switched on outside SHS is switched off again.
 
+### Car charging stopped outside SHS
+
+User requirement, 20 November 2026: a car cannot be unplugged while it is
+charging. When the car's charge switch reported charging after SHS switched it
+on, and then reports off without SHS commanding it off, planned charging pauses
+for one minute instead of being switched back. If the car is still connected
+after the minute, planned charging resumes. Each further stop made outside SHS
+starts another one-minute pause. The pause is journalled with the charger's
+ownership record, so a restart during it does not restart charging early. The
+pause is not a release: the captured baseline, ownership and every other rule
+here are unchanged, and a switch that has not yet reported charging after SHS's
+command (Tessie lags about 40 seconds) is still SHS's own command landing.
+
 To operate a device by hand, use what releases it: the select or a configured
 manual-override entity. This supersedes the earlier `overridden` latch, which
 left the manual setting alone and handed the rest of the device back; a latch

@@ -99,7 +99,9 @@ SHS. Such a stop is detected as a genuine external change: the charge switch is
 available and off, and SHS did not command it off. It ends the override instead
 of being switched back. Stops SHS commands itself, such as slowing down below
 the charger's minimum current or a plan slot with no charging, never end the
-override. An unavailable switch is unknown and holds, as elsewhere.
+override. An unavailable switch is unknown and holds, as elsewhere. The car then
+returns to the plan, where the same stop pauses planned charging for one minute
+(see [control continuity](control-continuity.md#car-charging-stopped-outside-shs)).
 
 ## Durability
 
