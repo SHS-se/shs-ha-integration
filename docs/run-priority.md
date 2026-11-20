@@ -51,6 +51,12 @@ heater on or off). The same calculation restores power as capacity returns.
 - An increase is funded only by capacity that is measurably free. Until its
   meter shows the drop, a load still holds the greater of its setting and its
   measured draw. Pending starts stay reserved separately.
+- A car start that counts on commanded battery charge being released is
+  decided by the same sharing, with the car sized as it will be once its
+  switch is on. It starts only at the share the running car keeps. On 20
+  November 2026 the start assumed the release while live priority kept the
+  more pressing battery, so the charger was switched on and off every few
+  seconds.
 - Choices within six minutes or a tenth of each other count as the same impact
   and keep the current allocation.
 - A boost above the plan earns delivery credit, so it is reclaimed first only

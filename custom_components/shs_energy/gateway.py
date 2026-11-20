@@ -1038,10 +1038,13 @@ class HomeAssistantSource:
         # An issued boost belongs to the run until priority reclaims it.
         wanted = max(own['requested'], min(issued, own.get('maximum', issued)))
         step = finite(native['attributes'].get('step') or 1)
+        # A car about to start is sized as it will be once its switch is on,
+        # holding its setting, so the start and the running share agree.
+        present = effect['after_w'] if own.get('starting') else effect['before_w']
         candidate = dict(owner='ev', kind='ev', identity=effect['device'], draw_w=draw, metered=True,
             want_w=wanted * EV_WATTS_PER_AMP, step_w=step * EV_WATTS_PER_AMP,
             scheduled_w=own['requested'] * EV_WATTS_PER_AMP,
-            floor_w=own['minimum'] * EV_WATTS_PER_AMP, present_w=effect['before_w'],
+            floor_w=own['minimum'] * EV_WATTS_PER_AMP, present_w=present,
             sources=(effect['sensor'], entity, switch),
             key=('ev', native['state'], self.report(switch)['state'], draw, own['requested'], own['minimum'], own.get('maximum')))
         if run is not None:
@@ -2038,9 +2041,20 @@ class HomeAssistantSource:
             installed = battery.installation[3]
             if self.report(installed['battery_mode_entity'])['state'] in CHARGING_MODES:
                 exclude = self.battery_capacity_key(installed)
+        available = requested
+        if exclude is not None:
+            # Counting on that charge is a live-priority decision. Start only
+            # at the share the running car keeps: when a more pressing battery
+            # keeps its charge, the car would be stopped again at the next
+            # evaluation (start/stop every few seconds, 20 November 2026).
+            decision = self.priority_pass(ev=dict(entity=entity, switch=switch, requested=requested,
+                                                  minimum=minimum, starting=True))
+            if decision is not None and 'ev' in decision['granted']:
+                available = min(requested, ev_current_ceiling(decision['granted']['ev'], native['attributes'], minimum))
+                if available == 0:
+                    return 0.0
         limit = self.house_import_limit()
         reserved = self.heating_effects()
-        available = requested
         while available >= minimum and available > 0:
             watts = available * EV_WATTS_PER_AMP
             desired = {**effect, 'after_w':watts, 'possible_w':watts,

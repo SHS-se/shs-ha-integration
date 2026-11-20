@@ -813,6 +813,45 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(capacity['external_import_w'], 15000 - want, 'The battery absorbs the reduction')
         self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 10)
 
+    async def waiting_car_beside_charging_battery(self, car_run):
+        """20 November 2026, 05:24: a 5 A start beside 2.5 kW of commanded battery charge near the limit."""
+        ev = self.executable_ev(car_run)
+        ev['parameters']['current_a'] = 5
+        self.rows['switch.ev']['state'] = 'off'
+        self.rows['number.ev']['state'] = '5'
+        self.rows['sensor.ev']['state'] = '0'
+        self.charging_battery(measured_w=2530, soc='54')
+        self.rows['sensor.house']['state'] = '10000'
+        self.rows['sensor.grid']['state'] = '12600'
+        await self.source.request('battery_capacity', {'charge_run':{
+            'run':self.battery_run(minutes=12, target_wh=10600), 'want_w':self.conversion.grid_charge.input(8800)}})
+
+    async def evaluations_following_the_switch(self, count=6):
+        """Each evaluation's decision, with the charger switch following it as the command would."""
+        decisions = []
+        for _ in range(count):
+            current = await self.source.limit_ev_current('number.ev', 'switch.ev', 5, 5)
+            decisions.append((self.rows['switch.ev']['state'], current))
+            self.rows['switch.ev']['state'] = 'on' if current else 'off'
+        return decisions
+
+    async def test_car_does_not_start_on_charge_a_more_pressing_battery_keeps(self):
+        # The start counted on the battery releasing its charge, but live
+        # priority kept the battery, whose window was closing, and gave the
+        # running car nothing. The charger was switched on and off every few
+        # seconds. The start now follows the share the running car would keep.
+        await self.waiting_car_beside_charging_battery(self.car_run(hours=4, planned_w=3450, spare_w=4000))
+        self.assertEqual(await self.evaluations_following_the_switch(), [('off', 0)] * 6)
+        self.assertLess(self.source.priority_last['slack_h']['battery'], self.source.priority_last['slack_h']['ev'])
+        self.rows['switch.ev']['state'] = 'on'
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 5, 5), 0,
+                         'The running decision is the one the start was checked against')
+
+    async def test_more_pressing_car_starts_on_released_battery_charge_and_keeps_running(self):
+        await self.waiting_car_beside_charging_battery(self.car_run(hours=2, planned_w=3450))
+        self.assertEqual(await self.evaluations_following_the_switch(), [('off', 5)] + [('on', 5)] * 5)
+        self.assertLess(self.source.priority_last['granted']['battery'], 2530, 'The battery yields to the car')
+
     async def test_restored_power_needs_measurably_free_capacity(self):
         # The room outranks the car, but the car's reduction is still in
         # flight: its measured draw has not fallen, so the room keeps waiting.
