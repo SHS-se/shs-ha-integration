@@ -55,6 +55,24 @@ def override_current(need_kwh, deadline, now, minimum_a, maximum_a):
     return float(min(maximum_a, max(minimum_a, current)))
 
 
+# Live priority slack for an override that needs full power now: below every
+# other run, so heaters and battery charging yield to the car.
+URGENT_SLACK_H = -1000.0
+
+
+def override_slack_h(need_kwh, deadline, now, maximum_a):
+    """Hours the override could still wait at full power; URGENT once it cannot.
+
+    A long override yields to more pressing loads and catches up later. Once
+    the time left is what full power needs, the car comes first (user
+    requirement, 20 November 2026).
+    """
+    if deadline is None or need_kwh is None:
+        return URGENT_SLACK_H
+    slack = (deadline - now).total_seconds() / 3600 - need_kwh * 1000 / (maximum_a * EV_WATTS_PER_AMP)
+    return slack if slack > 0 else URGENT_SLACK_H
+
+
 def capacity_kwh(soc, remaining_kwh):
     """The battery size the car's own readings imply, or None."""
     if remaining_kwh is None or soc is None or soc < 0.05:
@@ -75,6 +93,8 @@ class EvChargeOverride:
         self.store, self.changed, self.now = store, changed, now
         self.lock = asyncio.Lock()
         self.value = empty()
+        # What execution last asked live priority for; memory only.
+        self.live = None
 
     async def load(self):
         saved = await self.store.async_load()
@@ -155,6 +175,7 @@ class EvChargeOverride:
                 return
             new = deepcopy(self.value)
             new['active'] = None
+            self.live = None
             await self._save(new)
 
     async def retire(self, options):

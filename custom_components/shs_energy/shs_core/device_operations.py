@@ -25,7 +25,8 @@ from .hot_water import is_hot_water, heating_permission, hot_water_setup_errors,
 from .device_controls import device_planning_path, pool_control_errors, pool_control_mapping, planning_path
 from .device_controls import pool_requested_w, pool_permission
 from .heating_overrides import heating_binding, relay_heat, room_temperature
-from .ev_charge_override import capacity_kwh, charge_need_kwh, efficiency, override_current
+from .ev_charge_override import (URGENT_SLACK_H, capacity_kwh, charge_need_kwh, efficiency,
+                                 override_current, override_slack_h)
 
 _LOGGER = logging.getLogger(__name__)
 DEVICES = ("battery", "ev", "pool")
@@ -456,6 +457,10 @@ class DeviceOperations:
             # The override is a floor on the plan, within the charger's reviewed range.
             current = max(current, forced["current_a"])
             slot_minimum, slot_maximum = low, high
+            # Live priority sizes the car from this, also in other owners' decisions.
+            self.ev_override.live = dict(current_a=current, slack_h=forced["slack_h"],
+                                         urgent=forced["slack_h"] <= URGENT_SLACK_H,
+                                         started_at=forced["started_at"])
             target_soc = forced["target_soc"]
             slot = {**slot, "spare_house_w": None}
         if current == 0 or disconnected or soc >= target_soc:
@@ -616,10 +621,11 @@ class DeviceOperations:
         else:
             need = charge_need_kwh(soc, target, size, efficiency(options))
             current = override_current(need, deadline, now, low, high)
+        slack = override_slack_h(need, deadline, now, high)
         self.device_deadline("charge_override", now + timedelta(minutes=5))
         by = f" by {deadline.isoformat(timespec='minutes')}" if deadline else " as fast as possible"
         return {"current_a": current, "target_soc": target, "started_at": row["started_at"],
-                "row": {**row, "need_kwh": need},
+                "slack_h": slack, "row": {**row, "need_kwh": need},
                 "reason": f"Charge override to {row['target_soc']:g}%{by}."}
 
     async def end_ev_charge_override(self, options):

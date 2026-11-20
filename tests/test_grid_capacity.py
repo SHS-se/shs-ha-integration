@@ -631,6 +631,56 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         return {'kind':'charge', 'id':'plan:ev',
                 'windows':[[now-QUARTER, now+int(hours*3_600_000), planned_w, maximum_w, spare_w]]}
 
+    def charge_override(self, *, slack_h, current=10, started_at=None):
+        """A manual charge override as execute_ev last sized it (docs/ev-charge-override.md)."""
+        from shs_core.ev_charge_override import EvChargeOverride, URGENT_SLACK_H
+        store = EvChargeOverride(SimpleNamespace(), lambda: None)
+        started_at = started_at or datetime.now(timezone.utc).isoformat()
+        store.value['active'] = dict(target_soc=90, deadline=None, started_at=started_at,
+                                     saved_limit=None, raised_limit=None)
+        store.live = dict(current_a=current, slack_h=slack_h, urgent=slack_h <= URGENT_SLACK_H,
+                          started_at=started_at)
+        self.service.ev_override = store
+        return store
+
+    async def test_an_override_needing_full_power_comes_before_scheduled_heat(self):
+        from shs_core.ev_charge_override import URGENT_SLACK_H
+        # Without the override this car would yield one step to the room.
+        self.executable_ev(self.car_run(hours=2, spare_w=4000))
+        self.scheduled_room(temperature=19.1)
+        self.charge_override(slack_h=URGENT_SLACK_H)
+        self.assertTrue(self.source.scheduled_heat_shed('device:room'), 'The heater yields to the car')
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 10)
+
+    async def test_a_long_override_slows_down_before_cutting_heat(self):
+        self.executable_ev(self.car_run(hours=2, spare_w=4000))
+        self.scheduled_room(temperature=19.1)
+        self.charge_override(slack_h=7.0)
+        self.assertFalse(self.source.scheduled_heat_shed('device:room'))
+        self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 9,
+                         'The car takes the step down and catches up later')
+
+    async def test_an_override_counts_even_when_the_plan_has_no_charging_now(self):
+        from shs_core.ev_charge_override import URGENT_SLACK_H
+        ev = self.executable_ev(self.car_run(hours=2))
+        ev['parameters']['current_a'] = 0
+        now = self.now_ms()
+        self.assertIsNone(self.source.ev_candidate(now))
+        self.charge_override(slack_h=URGENT_SLACK_H, current=16)
+        candidate = self.source.ev_candidate(now)
+        self.assertEqual(candidate['want_w'], 16 * 690)
+        self.assertEqual(candidate['slack_h'], URGENT_SLACK_H)
+
+    async def test_an_urgent_override_claims_its_share_before_the_car_starts(self):
+        from shs_core.ev_charge_override import URGENT_SLACK_H
+        self.executable_ev(self.car_run(hours=2))
+        self.rows['switch.ev']['state'] = 'off'
+        now = self.now_ms()
+        self.charge_override(slack_h=5.0)
+        self.assertIsNone(self.source.ev_candidate(now), 'A patient override waits for capacity')
+        self.charge_override(slack_h=URGENT_SLACK_H)
+        self.assertIsNotNone(self.source.ev_candidate(now))
+
     async def test_waiting_pool_start_reclaims_optional_ev_current(self):
         ev = self.executable_ev(self.car_run(hours=2, planned_w=3450))
         ev['parameters']['current_a'] = 5

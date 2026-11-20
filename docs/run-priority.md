@@ -21,6 +21,7 @@ could go without its present power and still meet its accepted objective.
 |---|---|
 | Car | Capacity left in its contiguous authorised windows, less the planned energy still to deliver and the shortfall carried from measured delivery, divided by its present power. |
 | House battery | The same, against its stored-energy objective: target minus measured state of charge, up to the objective's deadline. A nearly full battery is urgent when its window is about to close. |
+| Car under a manual charge override | Hours left before the override's deadline less the hours full power needs; below every other run once that is no longer positive or there is no deadline ([EV charge override](ev-charge-override.md)). |
 | Room heater | The pause the room can tolerate at its current comfort floor, constrained by future accepted floors. The estimate uses the thermostat's own temperature (the room sensor for a relay), cooling while paused and warming after resuming. A room with no known current floor is treated as at its limit. |
 
 Capacity a run can recover in comes from its own windows at their authorised

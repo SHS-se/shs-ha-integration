@@ -593,6 +593,28 @@ class HeatingCapacityTests(IsolatedAsyncioTestCase):
         self.assertEqual(caps['device@switch.second']['heating'], {OWNER:1})
 
 
+    async def test_newest_wins_between_a_charge_override_and_a_room_override(self):
+        # docs/ev-charge-override.md: the override set most recently keeps the capacity.
+        from shs_core.ev_charge_override import EvChargeOverride
+        from shs_core.heating_overrides import heating_room
+        self.make_room()
+        self.source.ev_override_newer.__globals__['heating_room'] = heating_room
+        now = self.service.heating.now()
+        zone = self.service.heating.value['zones'][OWNER]
+        self.service.heating.value['order'].append('ev')
+        store = EvChargeOverride(SimpleNamespace(), lambda: None)
+        store.value['active'] = dict(target_soc=90, deadline=None, started_at=now.isoformat(),
+                                     saved_limit=None, raised_limit=None)
+        store.live = dict(current_a=16, slack_h=-1000.0, urgent=True, started_at=now.isoformat())
+        self.service.ev_override = store
+        cap = {'owner':'ev', 'heating':{OWNER:1}}
+        zone['started_at'] = (now - timedelta(minutes=10)).isoformat()
+        self.assertTrue(self.source.ev_override_newer(OWNER))
+        self.assertFalse(self.source.heating_cap_current(cap), 'the newer car is not cut back for the room')
+        zone['started_at'] = (now + timedelta(minutes=1)).isoformat()
+        self.assertFalse(self.source.ev_override_newer(OWNER))
+        self.assertTrue(self.source.heating_cap_current(cap), 'a newer room may cut the car back')
+
     async def test_a_paused_thermostat_releases_only_measured_watts(self):
         capacity = empty_capacity()
         identity = 'device@climate.other'

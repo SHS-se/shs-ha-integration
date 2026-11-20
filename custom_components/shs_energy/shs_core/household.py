@@ -73,6 +73,7 @@ from .const import (
     OPT_EV_CONNECTED_ENTITY,
     OPT_EV_ENABLED,
     OPT_EV_SOC_ENTITY,
+    OPT_EV_TARGET_SOC_ENTITY,
     OPT_POOL_ENABLED,
     OPT_GRID_EXPORT_POWER_ENTITY,
     OPT_BATTERY_CAPACITY_KWH,
@@ -2585,6 +2586,22 @@ class Household:
             )
         return price_catalog
 
+    # (saved, raised) while a manual charge override has raised the car's limit.
+    ev_override_limit: tuple[float, float] | None = None
+
+    def _planning_entity_payload(self, entity_id: str) -> dict[str, Any]:
+        """Planning sees the car's own charge limit, not one an override raised."""
+        payload = self._entity_payload(entity_id)
+        override = self.ev_override_limit
+        if override is not None and entity_id == self.ports.options().get(OPT_EV_TARGET_SOC_ENTITY):
+            saved, raised = override
+            try:
+                if abs(float(payload["state"]) - raised) < 1e-6:
+                    payload = {**payload, "state": str(saved)}
+            except (TypeError, ValueError):
+                pass
+        return payload
+
     def _entity_payload(self, entity_id: str) -> dict[str, Any]:
         state = self.ports.read_state(entity_id)
         if state is None:
@@ -2937,7 +2954,7 @@ class Household:
             options,
             horizon,
             device_models,
-            read_entity=self._entity_payload,
+            read_entity=self._planning_entity_payload,
             local_tz=self.ports.home().timezone,
             ev_capacity_kwh=ev_capacity_kwh,
             device_actuals=device_actuals,

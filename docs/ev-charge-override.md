@@ -2,15 +2,13 @@
 
 User requirement, 20 November 2026.
 
-Implementation status: the controls, the stored override, the charge rate,
-slowing down under the house import limit, the charge-limit raise and
-restore, and every ending below are implemented
-(`shs_core/ev_charge_override.py`, `DeviceOperations.ev_charge_override`).
-Not yet implemented: cutting other loads once full power is needed, the
-newest-wins rule against room overrides, stopping battery grid charging for
-the car, and reporting the saved limit to the planner during an override.
-Until then the override takes whatever capacity the existing live priority
-leaves the car.
+Implemented in `shs_core/ev_charge_override.py`,
+`DeviceOperations.ev_charge_override`, the live-priority candidate in
+`gateway.py` (`ev_candidate`, `ev_override_live`, `ev_override_newer`) and
+`Household._planning_entity_payload`. One part is narrower than written
+below: a newer car override is never cut back for an older room override, but
+it does not pause that room's heater either. The heater keeps the power it
+was admitted with.
 
 A manual override that charges the car to a chosen state of charge within a
 chosen number of hours, the way a room heating override sets a temperature for
@@ -59,6 +57,14 @@ continuously, so a slow car moves the floor up rather than making the
 countdown impossible.
 
 ## Charging behaviour
+
+Cutting other loads uses [live priority](run-priority.md). The override gives
+the car its own slack: the hours left before the deadline less the hours full
+power needs. A long override has positive slack and yields to more pressing
+runs. Once the time left is what full power needs, or the override has no
+deadline, its slack is below every other run, so scheduled heaters and
+commanded battery charging yield to it, and it claims that share before the
+car starts.
 
 - The override rate is the energy still needed ÷ the time left, recalculated
   continuously. Below the charger's minimum current the car charges at the

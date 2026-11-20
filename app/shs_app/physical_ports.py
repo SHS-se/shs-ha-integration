@@ -27,6 +27,11 @@ class RemoteDevices:
         self.policy = value
         result = await self.gateway.call('synchronize', {'models':models})
         self.heating = result.pop('heating', {})
+        override = (result.pop('ev_override', None) or {}).get('active')
+        # While a charge override has raised the car's limit, the planner
+        # plans against the limit it will return to (docs/ev-charge-override.md).
+        self.household.ev_override_limit = ((override['saved_limit'], override['raised_limit'])
+            if override and override.get('raised_limit') is not None else None)
         self.control_notices = result.pop('control_notices', {})
         await self.household.async_capacity_recovered(result.pop('capacity_recoveries'))
         return result

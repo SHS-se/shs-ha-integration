@@ -47,7 +47,7 @@ from .shs_core.gateway_journal import AdmissionPending, ConfigurationPending, Ga
 from .shs_core.gateway_service import GatewayService, AppConnection
 from .shs_core.ev_charge_override import EvChargeOverride
 from .shs_core.heating_overrides import (HeatingOverrides, active_heating, heating_binding,
-    heating_members, relay_heat, room_temperature)
+    heating_members, heating_room, relay_heat, room_temperature)
 from .shs_core.gateway_stream import GatewayCommands, GatewayOperations, GatewayRecord, GatewayStream
 from .shs_core.execution_configuration import ExecutionConfiguration
 from .shs_core.source_admission import (validate_bindings, ordered, FACT_ATTRIBUTES, native_pool_idle, owned_device_sources,
@@ -1032,10 +1032,12 @@ class HomeAssistantSource:
             start = int(datetime.fromisoformat(value['parameters']['start']).timestamp() * 1000)
             current = start <= now_ms < start + run_priority.QUARTER_MS
             run = value['parameters'].get('run') if current else None
+        live = self.ev_override_live()
         if own is None:
             # Another owner's decision may count on the car only while its own
             # executor could act on the result right now.
-            if device_mode(options, 'ev') != 'controlling' or not current or value['parameters']['current_a'] <= 0:
+            if (device_mode(options, 'ev') != 'controlling' or not current
+                    or value['parameters']['current_a'] <= 0 and live is None):
                 return None
             try:
                 intent = DeviceIntent.parse(value)
@@ -1050,16 +1052,19 @@ class HomeAssistantSource:
                 entity, minimum = self.flexible_ev(options, record)
                 switch = options['ev_charge_switch_entity']
                 physical.actuator_state(entity)
-                ev_current_ceiling(intent.parameters['current_a'] * EV_WATTS_PER_AMP,
-                    self.report(entity)['attributes'], minimum)
-                if physical.actuator_state(switch).state != 'on':
+                requested = live['current_a'] if live else intent.parameters['current_a']
+                ev_current_ceiling(requested * EV_WATTS_PER_AMP, self.report(entity)['attributes'], minimum)
+                starting = physical.actuator_state(switch).state != 'on'
+                # A charge override that needs full power claims its share
+                # before it starts, so heaters and battery charging yield.
+                if starting and not (live and live['urgent']):
                     return None
                 # These inputs are required by execute_ev before it can reduce.
                 if physical.state(options['ev_connected_entity']).state not in ('on', 'off', 'true', 'false', 'connected', 'disconnected'):
                     return None
                 physical.fraction(options['ev_soc_entity'])
                 physical.fraction(options['ev_target_soc_entity'])
-                own = dict(entity=entity, switch=switch, requested=intent.parameters['current_a'], minimum=minimum)
+                own = dict(entity=entity, switch=switch, requested=requested, minimum=minimum, starting=starting)
                 return self._ev_candidate(own, run, now_ms)
             except (AdmissionPending, ControlObservationError, ValueError, KeyError, TypeError):
                 return None  # Missing evidence cannot promise that the car will yield.
@@ -1093,6 +1098,13 @@ class HomeAssistantSource:
             key=('ev', native['state'], self.report(switch)['state'], draw, own['requested'], own['minimum'], own.get('maximum'), held))
         if held is not None:
             candidate.update(held_w=held, budget_draw_w=max(draw, held))
+        live = self.ev_override_live()
+        if live is not None:
+            # A manual charge override states its own urgency: it yields
+            # while its deadline allows and comes first once it needs full
+            # power (docs/ev-charge-override.md).
+            candidate['slack_h'] = live['slack_h']
+            return candidate
         if run is not None:
             # Only SHS's own reductions build a shortfall. A car that takes
             # less than an untrimmed setting allows is limiting itself.
@@ -1551,12 +1563,30 @@ class HomeAssistantSource:
                     return value
         return capped_intention(value,cap['maximum_w'])
 
+    def ev_override_live(self):
+        """The active manual charge override's live request, or None."""
+        store = getattr(self.service, 'ev_override', None)
+        if store is None or store.active is None or store.live is None:
+            return None
+        return store.live
+
+    def ev_override_newer(self, room_owner):
+        """Newest wins between a car override and a room override."""
+        live = self.ev_override_live()
+        if live is None:
+            return False
+        heating = self.service.heating
+        row = heating.value['zones'].get(heating_room(self.options(), room_owner), {}) if heating else {}
+        return live['started_at'] > row.get('started_at', '')
+
     def heating_cap_current(self, cap):
         heating = self.service.heating
         options = self.options()
         now = heating.now()
         if cap['owner'] not in heating.value['order']:
             return False
+        if cap['owner'] == 'ev' and all(self.ev_override_newer(owner) for owner in cap.get('heating', {})):
+            return False  # A newer charge override is not cut back for an older room.
         return any((active := active_heating(heating.value, options, owner, now))
                    and active['revision'] == revision
                    for owner, revision in cap.get('heating', {}).items())
@@ -1658,6 +1688,8 @@ class HomeAssistantSource:
                 if (active_heating(heating.value, options, owner, now)
                         or device_mode(options, owner) != 'controlling'):
                     continue
+                if owner == 'ev' and self.ev_override_newer(owner_request):
+                    continue  # Newest wins: a newer charge override keeps its power.
                 if owner == 'battery':
                     battery = self.service.battery
                     if battery.installation is not None:
@@ -2111,7 +2143,8 @@ class HomeAssistantSource:
             if self.report(installed['battery_mode_entity'])['state'] in CHARGING_MODES:
                 exclude = self.battery_capacity_key(installed)
         available = requested
-        if exclude is not None:
+        live = self.ev_override_live()
+        if exclude is not None or live is not None and live['urgent']:
             # Counting on that charge is a live-priority decision. Start only
             # at the share the running car keeps: when a more pressing battery
             # keeps its charge, the car would be stopped again at the next

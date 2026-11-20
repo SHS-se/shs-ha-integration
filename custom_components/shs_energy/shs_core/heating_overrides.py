@@ -168,6 +168,9 @@ class HeatingOverrides:
                         raise ValueError('Choose a temperature within the equipment range')
                     row['bindings' if isinstance(binding, dict) else 'binding'] = binding
                     row['target_c'] = value
+                    if not active:
+                        # Newest wins against a car charge override (docs/ev-charge-override.md).
+                        row['started_at'] = now.isoformat()
                     row['expires_at'] = (active['expires_at'] if active else
                         (now + timedelta(minutes=row.get('minutes', DEFAULT_MINUTES))).isoformat())
                 elif field == 'minutes':

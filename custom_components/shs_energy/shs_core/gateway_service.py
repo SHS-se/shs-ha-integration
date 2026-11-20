@@ -519,6 +519,8 @@ class AppConnection(GatewayConnection):
             result = await s.physical.synchronize(body['models'])
             if s.heating is not None:
                 result['heating'] = s.heating.value
+            if s.ev_override is not None:
+                result['ev_override'] = s.ev_override.value
             return result
         if op == 'heating':
             return (await s.change_heating(body['edit']) if body['edit'] is not None

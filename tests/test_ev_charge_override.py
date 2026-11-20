@@ -241,5 +241,30 @@ class EntityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.target.native_value)
 
 
+
+class PlannerLimitTests(unittest.TestCase):
+    """While an override has raised the car's limit, the planner sees the saved one."""
+
+    def payload(self, limit, override):
+        from types import SimpleNamespace
+        from shs_core.household import Household
+        rows = {'number.car_limit': limit, 'sensor.ev_soc': '40'}
+        host = SimpleNamespace(
+            ev_override_limit=override,
+            ports=SimpleNamespace(options=lambda: {'ev_target_soc_entity': 'number.car_limit'}),
+            _entity_payload=lambda entity: {'entity_id': entity, 'state': rows[entity],
+                                            'attributes': {'unit_of_measurement': '%'}})
+        return lambda entity: Household._planning_entity_payload(host, entity)['state']
+
+    def test_a_raised_limit_is_planned_as_the_saved_limit(self):
+        read = self.payload('90', (80, 90))
+        self.assertEqual(read('number.car_limit'), '80')
+        self.assertEqual(read('sensor.ev_soc'), '40')
+
+    def test_a_limit_changed_elsewhere_is_planned_as_it_is(self):
+        self.assertEqual(self.payload('85', (80, 90))('number.car_limit'), '85')
+        self.assertEqual(self.payload('90', None)('number.car_limit'), '90')
+
+
 if __name__ == '__main__':
     unittest.main()
