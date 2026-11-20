@@ -732,7 +732,17 @@ class HomeAssistantSource:
         the meter shows what the car draws (Tessie lags about 40 seconds).
         """
         effect = self._latest_dispatched(self.capacity['devices'].get(identity, {}))
-        return effect if effect is not None and effect.get('status') == 'service_returned' else None
+        if effect is None or effect.get('status') != 'service_returned':
+            return None
+        sent = effect.get('dispatched_ms')
+        now = datetime.now(timezone.utc).timestamp() * 1000
+        if sent is not None and now - sent >= run_priority.EV_HOLD_MS:
+            # A charger meter that reports only when its reading changes never
+            # settles a steady new current. Past the car's slowest observed
+            # response, its measured draw is what it draws (20 November 2026:
+            # held at 5 A for minutes with capacity for 12 A).
+            return None
+        return effect
 
     def command_in_flight(self, entity, value):
         """A car current SHS sent moments ago that the car has not reported yet."""

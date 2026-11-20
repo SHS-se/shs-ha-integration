@@ -62,7 +62,12 @@ heater on or off). The same calculation restores power as capacity returns.
   moved before the car's meter (25–60 s) and Tessie's readback (about 40 s),
   the readback was rewritten every poll, and the current hunted between 10
   and 13 A.
-- The same car current is not sent again within 60 seconds of sending it.
+- A car current change is held for at most two minutes after it was sent.
+  The Easee meter reports only when its reading changes, so a steady new
+  current never settled and the car stayed at 5 A with capacity for 12 A
+  (20 November 2026). The car applied that change after about 64 s and
+  Tessie showed it after 116 s.
+- The same car current is not sent again within two minutes of sending it.
   Tessie echoes a sent current before its service call returns, which settles
   the change at once, and then polls the car's older value. On 20 November
   2026 that sent the same 14 A every ten seconds while the car reported 16

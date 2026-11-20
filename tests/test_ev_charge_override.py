@@ -68,7 +68,7 @@ class OverrideTests(Continuity):
         text = controller_explanation('ev', 'controlling', self.status(), self.slot)['explanation']
         self.assertIn('The plan requests no car charging now. The charge override takes precedence', text)
 
-    async def test_a_stale_current_readback_is_not_rewritten_within_a_minute(self):
+    async def test_a_stale_current_readback_is_not_rewritten_within_two_minutes(self):
         # 20 November 2026: Tessie echoed 14 A, then polled the car's older
         # 16 A, and the same 14 A was sent again every ten seconds.
         await self.controller.async_start()
@@ -83,7 +83,18 @@ class OverrideTests(Continuity):
         self.assertEqual(self.calls, [], 'the readback may still be from before the write')
         later(self, 1.1)
         await self.controller.async_tick()
-        self.assertEqual(self.calls, [('number.current', 16)], 'unanswered after a minute, it is asked again')
+        self.assertEqual(self.calls, [], 'Tessie showed a new current only after 116 s')
+        later(self, 2.1)
+        await self.controller.async_tick()
+        self.assertEqual(self.calls, [('number.current', 16)], 'unanswered after two minutes, it is asked again')
+
+    async def test_a_car_limit_before_charging_starts_is_not_blamed_on_the_house(self):
+        self.states['number.current'] = State(5, min=0, max=5, step=1, unit_of_measurement='A')
+        await self.controller.async_start()
+        await self.set('target', 90)
+        await self.controller.async_tick()
+        self.assertIn('The car reports a limit of 5 A', self.status()['reason'])
+        self.assertNotIn('House import', self.status()['reason'])
 
     async def test_preset_hours_spread_the_charge_but_not_below_the_minimum_current(self):
         await self.controller.async_start()

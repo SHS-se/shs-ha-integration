@@ -36,8 +36,8 @@ CONFIRM_SECONDS = 15
 PAUSE_RESPONSE_SECONDS = 60
 # A car cannot be unplugged while charging (user requirement, 20 November 2026).
 OUTSIDE_STOP_PAUSE_SECONDS = 60
-# Tessie polls the car's own value for up to a minute after a write.
-EV_RESEND_SECONDS = 60
+# Tessie showed a new current 116 s after the write (20 November 2026).
+EV_RESEND_SECONDS = 120
 # A Tesla often stops one percentage point short of its charge limit.
 CAR_STOP_SHORT = 0.01
 # Restarts and reconnects hide an entity for about a minute; longer needs attention.
@@ -559,7 +559,8 @@ class DeviceOperations:
                       "charge_override": forced["row"],
                       "decision": {"kind": "ev", "charging": True, "current_a": admitted}}
             if admitted < current:
-                result["reason"] += f" House import capacity allows {admitted:g} A for now."
+                result["reason"] += (f" House import capacity allows {admitted:g} A for now." if admitted < available
+                                     else f" The car reports a limit of {available:g} A for now.")
             return result
         if admitted > current:
             return {"state": "commanded", "requested_current_a": admitted,

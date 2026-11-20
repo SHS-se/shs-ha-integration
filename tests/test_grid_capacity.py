@@ -975,6 +975,18 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.rows['sensor.house']['state'] = self.rows['sensor.grid']['state'] = '15800'
         self.assertEqual(await self.car_current(), 12, 'Load beyond its own ramp still reduces it')
 
+    async def test_a_steady_new_current_is_not_held_beyond_two_minutes(self):
+        # 20 November 2026: the Easee meter reports only when its reading
+        # changes, so a steady 5 A never settled and the car stayed at 5 A.
+        from shs_core.run_priority import EV_HOLD_MS
+        self.car_charging_at_12_of_14()
+        await self.native('lower', 'ev', 'number.ev', 'set_value', 10.0)
+        identity = 'ev@number.ev,switch.ev'
+        effect = self.source.ev_change_in_flight(identity)
+        self.assertIsNotNone(effect)
+        effect['dispatched_ms'] -= EV_HOLD_MS
+        self.assertIsNone(self.source.ev_change_in_flight(identity), 'its measured draw decides again')
+
     async def test_lagging_readback_is_not_rewritten_until_acknowledged_or_the_response_window(self):
         from shs_core.run_priority import RESPONSE_MS
         self.car_charging_at_12_of_14()

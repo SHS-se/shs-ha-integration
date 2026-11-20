@@ -34,6 +34,9 @@ DELIVERY_GAP_MS = 5 * 60_000
 # responded within this window keeps being asked, and meanwhile counts as the
 # fixed load it measurably is, so another run takes the reduction.
 RESPONSE_MS = 60_000
+# The car applied a new current after about 64 s and Tessie showed it after
+# 116 s (20 November 2026); a change is held at most this long.
+EV_HOLD_MS = 120_000
 # Without evidence, yield in the earlier order: battery, then car, then heat.
 RANK = {'heat': 0, 'ev': 1, 'battery': 2}
 
