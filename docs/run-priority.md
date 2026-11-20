@@ -62,6 +62,12 @@ heater on or off). The same calculation restores power as capacity returns.
   moved before the car's meter (25–60 s) and Tessie's readback (about 40 s),
   the readback was rewritten every poll, and the current hunted between 10
   and 13 A.
+- The same car current is not sent again within 60 seconds of sending it.
+  Tessie echoes a sent current before its service call returns, which settles
+  the change at once, and then polls the car's older value. On 20 November
+  2026 that sent the same 14 A every ten seconds while the car reported 16
+  and 11 A. A charging switch reported on only as that echo is not the car
+  charging, so a later off is not an outside stop.
 - An increase is funded only by capacity that is measurably free. Until its
   meter shows the drop, a load still holds the greater of its setting and its
   measured draw. Pending starts stay reserved separately.

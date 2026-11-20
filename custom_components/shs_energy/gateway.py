@@ -1386,6 +1386,8 @@ class HomeAssistantSource:
 
     def priority_condition(self, owner, result):
         """Execution evidence for a limited run that cannot finish where the plan put it."""
+        if owner == 'ev' and self.ev_override_live() is not None:
+            return None  # A manual charge override is not the plan's run; the planner never sees it.
         if not self.priority_must_move(owner):
             return None
         if owner == 'ev':

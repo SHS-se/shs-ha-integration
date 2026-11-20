@@ -36,6 +36,8 @@ CONFIRM_SECONDS = 15
 PAUSE_RESPONSE_SECONDS = 60
 # A car cannot be unplugged while charging (user requirement, 20 November 2026).
 OUTSIDE_STOP_PAUSE_SECONDS = 60
+# Tessie polls the car's own value for up to a minute after a write.
+EV_RESEND_SECONDS = 60
 # Restarts and reconnects hide an entity for about a minute; longer needs attention.
 OBSERVATION_GRACE_SECONDS = 5 * 60
 
@@ -231,6 +233,13 @@ class DeviceOperations:
             # The control still reports its value from before this write
             # (Tessie lags about 40 s). Re-sending it is not a correction.
             equal = True
+        if (not equal and not self.verifying and getattr(self, "device", None) == "ev"
+                and domain == "number" and self.recently_sent(entity, value)):
+            # Tessie echoes a sent setting at once and then polls the car's
+            # older value for up to a minute. Within that minute the same
+            # setting is not sent again (20 November 2026: rewritten every
+            # ten seconds because the echo had settled the change).
+            equal = True
         _, service, service_data = native.action.service_call()
         data = {key: item for key, item in service_data.items() if key != "entity_id"}
         now = datetime.now(timezone.utc)
@@ -271,6 +280,8 @@ class DeviceOperations:
 
                 def sent():
                     self.command_times[entity] = datetime.now(timezone.utc)
+                    if getattr(self, "device", None) == "ev":
+                        self.__dict__.setdefault("ev_sends", {})[entity] = (value, self.command_times[entity])
                     command.update(called=True, transport="ambiguous")
 
                 command["command_id"] = self.command_identity()
@@ -278,6 +289,8 @@ class DeviceOperations:
                 await self.native_executor.execute(request, authorize=authorize,
                     timeout=CONFIRM_SECONDS, on_sent=sent)
                 command["transport"] = "accepted"
+                # Reports up to now may be the integration echoing this request.
+                self.__dict__.setdefault("returned_at", {})[entity] = datetime.now(timezone.utc)
             if record is not None and not self.restoring and service != 'set_hvac_mode':
                 record.setdefault("last_commands", {})[entity] = value
                 await self.save()
@@ -288,6 +301,22 @@ class DeviceOperations:
             raise
         finally:
             command["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+    def recently_sent(self, entity, value):
+        """The same car setting was sent within the equipment response window."""
+        sent = self.__dict__.get("ev_sends", {}).get(entity)
+        if sent is None or datetime.now(timezone.utc) - sent[1] >= timedelta(seconds=EV_RESEND_SECONDS):
+            return False
+        try:
+            return abs(float(sent[0]) - float(value)) < 1e-6
+        except (TypeError, ValueError):
+            return sent[0] == value
+
+    def reported_since_return(self, entity, state):
+        """The control reported after SHS's last call to it returned, not only echoed it."""
+        returned = self.__dict__.get("returned_at", {}).get(entity)
+        reported = getattr(state, "last_reported", None) or getattr(state, "last_updated", None)
+        return returned is None or reported is None or reported > returned
 
     def matches(self, entity, value):
         state = (self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity)
@@ -548,7 +577,8 @@ class DeviceOperations:
         if self.verifying:
             return None
         record = self.ownership.records[device]
-        state = self.actuator_state(switch).state
+        reading = self.actuator_state(switch)
+        state = reading.state
         commanded = record.get("last_commands", {}).get(switch)
         now = datetime.now(timezone.utc)
         until = record.get("outside_stop_until")
@@ -556,7 +586,8 @@ class DeviceOperations:
         if state == "on":
             record.pop("outside_stop_until", None)
             until = None
-            if commanded == "on":
+            if commanded == "on" and self.reported_since_return(switch, reading):
+                # Tessie's echo of SHS's own switch-on is not the car charging.
                 record["charging_seen"] = True
         elif until is not None and now < datetime.fromisoformat(until):
             pass

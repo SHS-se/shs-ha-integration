@@ -803,6 +803,10 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.source.limit_ev_current('number.ev', 'switch.ev', 10, 5), 9)
         condition = self.source.priority_condition('ev', {'requested_current_a':9})
         self.assertEqual(condition, {'status':'capacity_limited', 'cause':'house_import_capacity', 'maximum_current_a':9})
+        # A manual charge override is app only: its limits never ask the planner to move work.
+        self.charge_override(slack_h=-1000.0)
+        self.assertIsNone(self.source.priority_condition('ev', {'requested_current_a':9}))
+        self.service.ev_override = None
         from shs_core import execution_replan
         journal = {}
         slot = {'start':datetime.now(timezone.utc).isoformat(), 'ev_target_current_a':10}

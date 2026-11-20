@@ -3,6 +3,7 @@ import unittest
 
 from test_controller import State, Store
 from test_control_continuity import Continuity, later
+from test_ev_outside_stop import car_reports
 from shs_core.ev_charge_override import (EvChargeOverride, capacity_kwh, charge_need_kwh,
                                          fastest_hours, override_current)
 
@@ -63,6 +64,26 @@ class OverrideTests(Continuity):
         self.assertEqual(self.override.active['saved_limit'], 80)
         self.assertEqual(self.override.active['raised_limit'], 90)
         self.assertIn('as fast as possible', self.status()['reason'])
+        from shs_core.presentation import controller_explanation
+        text = controller_explanation('ev', 'controlling', self.status(), self.slot)['explanation']
+        self.assertIn('The plan requests no car charging now. The charge override takes precedence', text)
+
+    async def test_a_stale_current_readback_is_not_rewritten_within_a_minute(self):
+        # 20 November 2026: Tessie echoed 14 A, then polled the car's older
+        # 16 A, and the same 14 A was sent again every ten seconds.
+        await self.controller.async_start()
+        await self.set('target', 54)
+        await self.controller.async_tick()
+        self.assertIn(('number.current', 16), self.calls)
+        self.states['switch.charge'] = car_reports('on')
+        self.states['number.current'] = State(12, min=5, max=16, step=1, unit_of_measurement='A')
+        self.calls.clear()
+        await self.controller.async_tick()
+        await self.controller.async_tick()
+        self.assertEqual(self.calls, [], 'the readback may still be from before the write')
+        later(self, 1.1)
+        await self.controller.async_tick()
+        self.assertEqual(self.calls, [('number.current', 16)], 'unanswered after a minute, it is asked again')
 
     async def test_preset_hours_spread_the_charge_but_not_below_the_minimum_current(self):
         await self.controller.async_start()
@@ -137,7 +158,8 @@ class OverrideTests(Continuity):
         await self.controller.async_start()
         await self.set('target', 90)
         await self.controller.async_tick()
-        await self.controller.async_tick()  # The car reports charging.
+        self.states['switch.charge'] = car_reports('on')  # The car reports charging.
+        await self.controller.async_tick()
         self.calls.clear()
         self.states['switch.charge'] = State('off')
         await self.controller.async_tick()
@@ -151,6 +173,7 @@ class OverrideTests(Continuity):
     async def test_an_override_set_during_a_pause_charges_at_once(self):
         self.slot['ev_target_current_a'] = 10
         await self.controller.async_start()
+        self.states['switch.charge'] = car_reports('on')  # The car reports charging.
         await self.controller.async_tick()
         self.states['switch.charge'] = State('off')
         await self.controller.async_tick()

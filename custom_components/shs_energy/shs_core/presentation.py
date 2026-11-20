@@ -336,6 +336,8 @@ def controller_explanation(device, mode, status, slot=None):
             if device == 'ev' and 'ev_target_current_a' in slot:
                 current = slot['ev_target_current_a']
                 planned = f'The plan requests charging at {current:g} A.' if current else 'The plan requests no car charging now.'
+                if status.get('charge_override'):
+                    planned += ' The charge override takes precedence until it ends.'
             elif device == 'pool' and 'pool_w' in slot:
                 planned = ('The plan has no new pool instruction; existing settings are retained.'
                            if 'pool_permitted' in slot and slot['pool_permitted'] is None else

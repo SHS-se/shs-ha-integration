@@ -4,6 +4,7 @@ User requirement, 20 November 2026: a car cannot be unplugged while it is
 charging, so SHS must not switch an outside stop straight back on. See
 docs/control-continuity.md, "Car charging stopped outside SHS".
 """
+from datetime import datetime, timedelta, timezone
 import unittest
 
 import test_controller as fixtures
@@ -11,7 +12,16 @@ from test_controller import State
 from test_control_continuity import Continuity, later
 
 
+def car_reports(value):
+    """A poll from the car, later than any call SHS made (tests move SHS's clock on)."""
+    state = State(value)
+    state.last_reported = state.last_updated = datetime.now(timezone.utc) + timedelta(hours=1)
+    return state
+
+
 class OutsideStopTests(Continuity):
+    """Car reports are fresh State objects; an in-call state change is an echo."""
+
     def setUp(self):
         super().setUp()
         self.options['device_modes']['$ev'] = 'controlling'
@@ -19,7 +29,8 @@ class OutsideStopTests(Continuity):
     async def charging(self):
         await self.controller.async_start()
         self.assertEqual(self.calls, [('number.current', 10), ('switch.charge', 'on')])
-        # The car reports charging after SHS switched it on.
+        # The car reports charging after SHS's call returned (not just an echo).
+        self.states['switch.charge'] = car_reports('on')
         await self.controller.async_tick()
         self.calls.clear()
 
@@ -52,6 +63,7 @@ class OutsideStopTests(Continuity):
         later(self, 1.1)
         await self.controller.async_tick()
         self.assertEqual(self.calls, [('switch.charge', 'on')])
+        self.states['switch.charge'] = car_reports('on')
         await self.controller.async_tick()
         self.calls.clear()
 
@@ -70,6 +82,14 @@ class OutsideStopTests(Continuity):
         self.assertNotIn(('switch.charge', 'on'), self.calls)
         self.assertEqual(self.status()['state'], 'stopped')
         self.assertNotIn('outside_stop_until', self.controller.ownership.records['ev'])
+
+    async def test_an_echo_of_shs_switching_on_is_not_the_car_charging(self):
+        await self.controller.async_start()
+        # Tessie echoed "on" during the call, then polled the car still stopped.
+        self.states['switch.charge'] = State('off')
+        await self.controller.async_tick()
+        self.assertNotIn('outside_stop_until', self.controller.ownership.records['ev'])
+        self.assertNotEqual(self.status()['decision'].get('reason'), 'charging stopped outside SHS')
 
     async def test_a_switch_still_reporting_off_after_shs_switched_it_on_is_not_an_outside_stop(self):
         await self.controller.async_start()
