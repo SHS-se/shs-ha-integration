@@ -13,7 +13,7 @@ from uuid import uuid4
 from .command_journal import Command
 from .native_commands import finite, native_command
 from .native_numbers import floor_native
-from .grid_capacity import GridCapacityConfigurationError
+from .grid_capacity import EV_WATTS_PER_AMP, GridCapacityConfigurationError
 from .device_ownership import DeviceOwnership
 from .api_contract import INTEGRATION_VERSION
 from .operating_modes import device_mode, EXECUTING_MODES
@@ -314,17 +314,35 @@ class DeviceOperations:
         finally:
             command["completed_at"] = datetime.now(timezone.utc).isoformat()
 
-    def ev_raise_held(self, entity, admitted):
-        """Raise the car's current at most once a minute; reductions apply at once.
+    def ev_raise_held(self, entity, admitted, power_entity=None):
+        """Raise the car's current only once the last one is confirmed; reductions apply at once.
 
-        20 November 2026: as the car ramped up, the meters moved and SHS sent
-        7, 11, 12 and 11 A within 14 seconds.
+        Confirmed means the car's meter, read after the send, shows it drawing
+        the sent current within one ampere. Tessie's readback cannot confirm:
+        it echoes a sent value at once and reports the car's older value for
+        up to two minutes. Without confirmation the raise waits a minute (a car
+        can stay below its setting). 20 November 2026: as the car ramped up,
+        SHS sent 7, 11, 12 and 11 A within 14 seconds.
         """
         sent = self.__dict__.get("ev_sends", {}).get(entity)
         if (self.verifying or sent is None or admitted <= finite(sent[0])
-                or datetime.now(timezone.utc) - sent[1] >= timedelta(seconds=EV_RESEND_SECONDS)):
+                or datetime.now(timezone.utc) - sent[1] >= timedelta(seconds=EV_RESEND_SECONDS)
+                or self.ev_current_confirmed(power_entity, finite(sent[0]), sent[1])):
             return admitted
         return finite(sent[0])
+
+    def ev_current_confirmed(self, power_entity, current, sent_at):
+        reading = self.state(power_entity) if power_entity else None
+        if reading is None or reading.state in ("unknown", "unavailable"):
+            return False
+        reported = getattr(reading, "last_reported", None) or getattr(reading, "last_updated", None)
+        if reported is None or reported <= sent_at:
+            return False
+        try:
+            watts = finite(reading.state) * (1000 if reading.attributes.get("unit_of_measurement") == "kW" else 1)
+        except (TypeError, ValueError):
+            return False
+        return abs(watts - current * EV_WATTS_PER_AMP) <= EV_WATTS_PER_AMP
 
     def recently_sent(self, entity, value):
         """The same car setting was sent within the equipment response window."""
@@ -589,7 +607,7 @@ class DeviceOperations:
         admitted = await self.ev_import_current(entity, switch, available, max(low, slot_minimum),
             maximum=min(high, slot_maximum), spare_house_w=slot.get('spare_house_w'),
             hold_spare_increase=slot.get('hold_spare_increase', False))
-        admitted = self.ev_raise_held(entity, admitted)
+        admitted = self.ev_raise_held(entity, admitted, self.ev_power_entity(options, switch))
         if admitted == 0:
             # Zero is a charging pause, not necessarily a supported number
             # setting. Keep the scheduled target so meter events can resume it.

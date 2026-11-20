@@ -103,6 +103,22 @@ class OverrideTests(Continuity):
         self.controller.ev_sends = {'number.current': (7.0, now - timedelta(seconds=61))}
         self.assertEqual(self.controller.ev_raise_held('number.current', 11.0), 11.0)
 
+    def test_a_raise_goes_out_once_the_cars_meter_confirms_the_last_current(self):
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        self.controller.verifying = False
+        self.controller.ev_sends = {'number.current': (7.0, now - timedelta(seconds=10))}
+        meter = State(1500, unit_of_measurement='W', state_class='measurement')
+        meter.last_reported = now - timedelta(seconds=20)  # before the send
+        self.states['sensor.ev_power'] = meter
+        self.assertEqual(self.controller.ev_raise_held('number.current', 11.0, 'sensor.ev_power'), 7.0)
+        meter = State(4900, unit_of_measurement='W', state_class='measurement')  # 7 A drawn
+        self.states['sensor.ev_power'] = meter
+        self.assertEqual(self.controller.ev_raise_held('number.current', 11.0, 'sensor.ev_power'), 11.0)
+        self.states['sensor.ev_power'] = State(2000, unit_of_measurement='W', state_class='measurement')
+        self.assertEqual(self.controller.ev_raise_held('number.current', 11.0, 'sensor.ev_power'), 7.0,
+                         'still ramping: not yet confirmed')
+
     async def test_preset_hours_spread_the_charge_but_not_below_the_minimum_current(self):
         await self.controller.async_start()
         await self.set('hours', 12)
