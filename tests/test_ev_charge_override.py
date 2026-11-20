@@ -148,6 +148,26 @@ class OverrideTests(Continuity):
         self.assertEqual(self.status()['decision']['reason'], 'charge override target reached')
         self.assertNotIn('outside_stop_until', self.controller.ownership.records['ev'], 'no pause')
 
+    async def test_a_stop_in_the_car_app_ends_the_override_and_leaves_the_car_stopped(self):
+        # 20 November 2026: SHS switches the Easee charger; a stop in the Tesla
+        # app leaves that switch on and the car drawing nothing.
+        self.options['device_control_mappings']['charger']['power'] = 'sensor.ev_power'
+        self.states['sensor.ev_power'] = State(7000, unit_of_measurement='W', state_class='measurement')
+        await self.controller.async_start()
+        await self.set('target', 90)
+        await self.controller.async_tick()
+        self.states['switch.charge'] = car_reports('on')
+        await self.controller.async_tick()
+        self.calls.clear()
+        self.states['sensor.ev_power'] = State(0, unit_of_measurement='W', state_class='measurement')
+        await self.controller.async_tick()
+        self.assertIsNotNone(self.override.active, 'a short dip is not a stop')
+        later(self, 1.1)
+        await self.controller.async_tick()
+        self.assertIsNone(self.override.active)
+        self.assertEqual(self.calls, [('number.car_limit', 80)], 'the charger switch is left alone')
+        self.assertEqual(self.status()['decision']['reason'], 'charging stopped outside SHS')
+
     async def test_a_limit_changed_elsewhere_is_left_as_it_is(self):
         await self.controller.async_start()
         await self.set('target', 90)

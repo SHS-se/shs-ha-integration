@@ -176,6 +176,14 @@ class DeviceGateway(DeviceOperations):
             for source in self.capacity.priority_sources():
                 self.observed_state(source)
 
+    def ev_power_entity(self, options, switch):
+        if self.capacity is None:
+            return super().ev_power_entity(options, switch)
+        try:
+            return self.capacity.describe_import('ev', switch, 'on')['sensor']
+        except (ValueError, KeyError, TypeError):
+            return None
+
     def observed_state(self, entity):
         if entity:
             self.reads.add(entity)

@@ -101,7 +101,11 @@ to the plan, when:
 - the car reaches the target, or reports charging complete at it (Tesla often
   stops one point short);
 - charging stops without SHS commanding it, for example from the Tesla app,
-  the car's screen or another automation;
+  the car's screen or another automation. SHS's start/stop switch is the
+  charger's (Easee), so a stop in the car leaves it on: once the car has drawn
+  power during the override and then draws none for a minute, the override
+  ends and SHS leaves the charger as it is. A stop at SHS's own switch also
+  starts the one-minute plan pause below;
 - the car is unplugged;
 - the user ends it with an end-override button;
 - the device leaves Controlling or is excluded. This

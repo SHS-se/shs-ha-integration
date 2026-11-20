@@ -43,6 +43,11 @@ EV_RESEND_SECONDS = 60
 # A charging switch that turns off this long after SHS switched it on was on
 # in between: Tessie reports it only when it changes, never re-reports it.
 OUTSIDE_STOP_SETTLE_SECONDS = 30
+# A car that drew power during an override and has drawn none for a minute,
+# with SHS's charger switch still on, was stopped in the car (20 November 2026).
+CAR_DRAWING_W = 1000
+CAR_IDLE_W = 100
+CAR_STOP_SECONDS = 60
 # A Tesla often stops one percentage point short of its charge limit.
 CAR_STOP_SHORT = 0.01
 # Restarts and reconnects hide an entity for about a minute; longer needs attention.
@@ -454,7 +459,7 @@ class DeviceOperations:
         finally:
             self.restoring = False
 
-    def ev_mapping(self, options):
+    def ev_candidates(self, options):
         plan = self.execution_plan() or {}
         keys = set((self.active_slot or {}).get("device_loads_w", {}))
         models = plan.get("device_models", [])
@@ -462,7 +467,15 @@ class DeviceOperations:
         routed = {m["key"] for m in models
                   if planning_path(m.get("control_type"), m.get("category")) == "ev"}
         mappings = options.get("device_control_mappings", {})
-        candidates = [mappings[key] for key in routed & keys if key in mappings]
+        return [mappings[key] for key in sorted(routed & keys) if key in mappings]
+
+    def ev_power_entity(self, options, switch):
+        """The car's metered charging power; the gateway uses its admitted source."""
+        powers = sorted({m["power"] for m in self.ev_candidates(options) if isinstance(m.get("power"), str)})
+        return powers[0] if powers else None
+
+    def ev_mapping(self, options):
+        candidates = self.ev_candidates(options)
         targets = {(m.get("control_entity_id"), m.get("minimum_value"),
                     m.get("maximum_value")) for m in candidates}
         if len(targets) != 1:
@@ -532,6 +545,14 @@ class DeviceOperations:
                     "reason": "The charge override reached its target; the car follows the plan again.",
                     "decision": {"kind": "ev", "charging": False, "current_a": 0,
                                  "reason": "charge override target reached"}}
+        if forced is not None and self.car_stopped_itself("ev", options, switch):
+            # SHS's own switch is still on: a stop in the car's app ends the
+            # override, and the car stays stopped so it can be unplugged.
+            await self.end_ev_charge_override(options)
+            return {"state": "stopped", "requested_current_a": 0,
+                    "reason": "The car stopped charging outside SHS, so the charge override has ended.",
+                    "decision": {"kind": "ev", "charging": False, "current_a": 0,
+                                 "reason": "charging stopped outside SHS"}}
         resumes = await self.outside_stop_pause("ev", switch)
         if resumes is not None:
             if forced is not None:
@@ -704,7 +725,33 @@ class DeviceOperations:
             if unchanged:
                 await self.command(limit_entity, row["saved_limit"])
         await store.clear()
+        (self.ownership.records.get("ev") or {}).pop("override_drawn", None)
         self.device_deadline("charge_override", None)
+
+    def car_stopped_itself(self, device, options, switch):
+        """The car drew power during the override and has drawn none for a minute.
+
+        With the charger switch still on, only the car (its app, its screen)
+        stops the charge. A car that stopped at its target is handled first.
+        """
+        record = self.ownership.records[device]
+        if self.verifying or self.actuator_state(switch).state != "on" or record.get("last_commands", {}).get(switch) != "on":
+            record.pop("override_drawn", None)
+            return False
+        entity = self.ev_power_entity(options, switch)
+        reading = self.state(entity) if entity else None
+        if reading is None or reading.state in ("unknown", "unavailable"):
+            return False
+        try:
+            watts = finite(reading.state) * (1000 if reading.attributes.get("unit_of_measurement") == "kW" else 1)
+        except (TypeError, ValueError):
+            return False
+        if watts >= CAR_DRAWING_W:
+            record["override_drawn"] = True
+            return False
+        changed = getattr(reading, "last_changed", None) or getattr(reading, "last_updated", None)
+        return bool(record.get("override_drawn") and watts < CAR_IDLE_W and changed is not None
+                    and datetime.now(timezone.utc) - changed >= timedelta(seconds=CAR_STOP_SECONDS))
 
     async def clear_outside_stop(self, device):
         record = self.ownership.records.get(device)
