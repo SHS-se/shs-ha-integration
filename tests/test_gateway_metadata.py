@@ -66,6 +66,15 @@ class Hass:
 
 
 class MetadataTests(unittest.IsolatedAsyncioTestCase):
+    async def test_vehicle_readiness_reads_only_the_durable_clock(self):
+        clock = {'entity_id':'device_tracker.synthetic_vehicle', 'home':False, 'elapsed_seconds':7200}
+        self.source.service.stream.call = AsyncMock(return_value=clock)
+        result = await self.source.request('vehicle_readiness', {})
+        self.assertEqual(result, clock)
+        self.source.service.stream.call.assert_awaited_once_with('load_record', 'ev_readiness')
+        with self.assertRaises(ValueError):
+            await self.source.request('vehicle_readiness', {'entity':'device_tracker.other'})
+
     async def test_probe_topology_request_is_targeted_read_only(self):
         facts = {'sensor.air':{'companions':['sensor.humidity'],'cohort_key':None}}
         self.source.history = SimpleNamespace(probe_sources=AsyncMock(return_value=facts))

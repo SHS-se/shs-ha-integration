@@ -17,6 +17,8 @@ import zlib
 from .command_journal import WriterLease, encoded, now_ms, RoutedCommand, ObligationCommand
 from .device_ownership import decode_ownership
 from .device_port import compact_device_intent
+from .car_readiness import observe_location
+from datetime import datetime, timezone
 from .grid_capacity import empty_capacity, canonicalize_capacity, prepare_capacity, finish_capacity, observe_capacity, dispatch_capacity, observe_power_peak, merge_power_peaks
 
 PROTOCOL = 2
@@ -25,7 +27,7 @@ PHYSICAL_RECORDS = frozenset({
     'ownership', 'battery_writer', 'physical', 'battery_obligation',
     'execution_configuration', 'entity_catalogue', 'source_admission',
     'house_import_limit', 'grid_capacity', 'power_peaks', 'heating_overrides',
-    'run_progress', 'ev_charge_override',
+    'run_progress', 'ev_charge_override', 'ev_readiness',
 })
 _LOGGER = logging.getLogger(__name__)
 _PACKED_TABLES = {
@@ -415,6 +417,24 @@ class GatewayJournal:
             if observe_power_peak(peaks, payload):
                 db.execute('INSERT OR REPLACE INTO records VALUES (?,?)', ('power_peaks', encoded(peaks)))
             settle(entity, ordinal, received_at_ms)
+        if kind in ('configuration', 'observation'):
+            saved = db.execute("SELECT payload FROM records WHERE name='ev_readiness'").fetchone()
+            record = json.loads(saved[0]) if saved else None
+            entity = (payload.get('options', {}).get('ev_location_entity') if kind == 'configuration'
+                      else record['entity_id'] if record else None)
+            if not entity:
+                if saved:
+                    db.execute("DELETE FROM records WHERE name='ev_readiness'")
+            elif kind == 'configuration' or payload.get('entity_id') == entity:
+                if kind == 'configuration':
+                    latest = db.execute('SELECT payload FROM latest WHERE entity=?', (entity,)).fetchone()
+                    observation = json.loads(latest[0]) if latest else None
+                else:
+                    observation = payload
+                updated = observe_location(record, entity, observation,
+                                           datetime.fromtimestamp(received_at_ms / 1000, timezone.utc))
+                if updated != record:
+                    db.execute('INSERT OR REPLACE INTO records VALUES (?,?)', ('ev_readiness', encoded(updated)))
         return ordinal
 
     @staticmethod

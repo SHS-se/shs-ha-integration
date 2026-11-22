@@ -26,6 +26,7 @@ from .operational_attention import pipeline_issue
 from .battery_live import BatteryLiveInputs
 from .battery_conversion import CONVERSION_EVIDENCE_MS
 from .car_plug import observe_plug
+from .car_readiness import location_readiness
 from .durable_record import DurableRecord
 from .operating_modes import device_mode, operating_mode_identity
 
@@ -3312,6 +3313,20 @@ class Household:
                 stored["ev_plug"] = plug
                 await self._store.async_save(stored)
             ev_battery["plugged_in_at"] = plug["plugged_in_at"]
+            if location := options.get("ev_location_entity"):
+                try:
+                    reading = await self.ports.history.vehicle_readiness()
+                except HouseholdReadError:
+                    reading = None
+                clock, estimated = location_readiness(reading, location, self.ports.utcnow())
+                ev_battery["readiness_clock"] = clock
+                ev_battery["source_entity_ids"]["location"] = location
+                if estimated:
+                    self.optimisation_warnings = merge_warnings(self.optimisation_warnings, [planning_warning(
+                        "ev_readiness_estimated", "ev", "The car's home-arrival clock has incomplete location evidence.",
+                        "Readiness uses the full charge-limit target until location evidence repairs the clock. "
+                        "Charging remains planned; cable state does not replace the configured location.",
+                        entity_id=location)])
 
         if self.tariff_catalog is None:
             raise OptimisationInputError(

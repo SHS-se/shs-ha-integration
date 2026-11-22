@@ -139,6 +139,9 @@ class RemoteHistory:
         with self.profiler.measure(name):
             return await self.gateway.call('source', {'operation':operation, 'body':body})
 
+    async def vehicle_readiness(self):
+        return await self.source('vehicle_readiness', {})
+
     async def statistics(self, start, end, entities, period, units, kinds):
         return await self.source('statistics', dict(start=start.isoformat(), end=end.isoformat(),
             entities=sorted(entities), period=period, units=units, kinds=sorted(kinds)))

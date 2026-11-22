@@ -15,6 +15,31 @@ from shs_core.receipt_inbox import ReceiptInbox, processing_checkpoint
 
 
 class GatewayTests(unittest.TestCase):
+    def test_vehicle_home_visits_commit_with_receipts_and_survive_restart(self):
+        from datetime import datetime, timezone
+        from shs_core.car_readiness import location_readiness
+        entity = 'device_tracker.synthetic_vehicle'
+        def observe(state, hour):
+            at = datetime(2026, 1, 1, hour, tzinfo=timezone.utc)
+            with patch('shs_core.gateway_journal.now_ms', return_value=int(at.timestamp() * 1000)):
+                return self.gateway.record('observation', dict(entity_id=entity, state=state, last_changed=at.isoformat()))
+        self.gateway.record('configuration', {'options':{'ev_location_entity':entity}})
+        observe('home', 1)
+        last = observe('not_home', 4)
+        self.gateway.close(); self.gateway.open()
+        record = self.gateway.load_record('ev_readiness')
+        clock, estimated = location_readiness(record, entity, datetime(2026, 1, 2, tzinfo=timezone.utc))
+        self.assertEqual((clock['elapsed_seconds'], clock['running'], estimated), (10800, False, False))
+        self.assertGreater(self.gateway.snapshot(self.gateway.begin(IDENTITY, 'restarted')['session'])['through'], last)
+        observe('home', 5)
+        before = self.gateway.load_record('ev_readiness')
+        observe('home', 9)  # HA startup reports must not look like an arrival.
+        self.assertEqual(self.gateway.load_record('ev_readiness'), before)
+        self.gateway.record('configuration', {'options':{'ev_location_entity':entity, 'ev_enabled':True}})
+        self.assertEqual(self.gateway.load_record('ev_readiness'), before)
+        self.gateway.record('configuration', {'options':{}})
+        self.assertIsNone(self.gateway.load_record('ev_readiness'))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

@@ -189,6 +189,7 @@ OPT_POOL_START_TEMPERATURE_ENTITY = "pool_start_temperature_entity"
 OPT_POOL_STOP_TEMPERATURE_ENTITY = "pool_stop_temperature_entity"
 
 OPT_EV_CONNECTED_ENTITY = "ev_connected_entity"
+OPT_EV_LOCATION_ENTITY = "ev_location_entity"
 OPT_EV_SOC_ENTITY = "ev_soc_entity"
 OPT_EV_TARGET_SOC_ENTITY = "ev_target_soc_entity"
 OPT_EV_ENERGY_REMAINING_ENTITY = "ev_energy_remaining_entity"

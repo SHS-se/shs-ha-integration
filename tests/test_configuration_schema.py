@@ -26,6 +26,19 @@ def save(existing, key, mapping):
 
 
 class ConfigurationReaderTests(unittest.TestCase):
+    def test_optional_vehicle_location_roundtrips_and_checks_entity_domain(self):
+        from shs_core.configuration_schema import OPTION_FIELDS, normalise_field_value, merge_options
+        field = OPTION_FIELDS['ev_location_entity']
+        self.assertFalse(field['required'])
+        self.assertEqual(field['domains'], ['device_tracker'])
+        read = lambda entity: {'state':'home', 'attributes':{}} if entity in ('device_tracker.synthetic_vehicle', 'sensor.wrong') else None
+        self.assertEqual(normalise_field_value(read, field, 'device_tracker.synthetic_vehicle', context='Vehicle'), 'device_tracker.synthetic_vehicle')
+        self.assertEqual(merge_options({}, {'ev_location_entity':'device_tracker.synthetic_vehicle'})['ev_location_entity'], 'device_tracker.synthetic_vehicle')
+        self.assertIsNone(normalise_field_value(read, field, '', context='Vehicle'))
+        for value in ('sensor.wrong', 'device_tracker.missing'):
+            with self.assertRaises(ValueError):
+                normalise_field_value(read, field, value, context='Vehicle')
+
     def test_editor_catalog_projects_the_current_save_contract_for_every_selector(self):
         catalog = device_field_catalog()
         self.assertEqual(len(catalog["rows"]), len(DEVICE_CATEGORIES) * (len(CONTROL_TYPES) + 1))

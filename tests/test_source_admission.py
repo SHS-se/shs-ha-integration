@@ -12,6 +12,10 @@ from shs_core.source_admission import (source_bindings, validate_bindings, order
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_vehicle_location_is_ordered_even_without_an_executable_ev(self):
+        uses = validate_bindings(source_bindings({'ev_location_entity':'device_tracker.synthetic_vehicle'}, []))
+        self.assertTrue(ordered(uses['device_tracker.synthetic_vehicle']))
+
     def setUp(self):
         self.now = datetime.now(timezone.utc)
         self.off = SimpleNamespace(state='off')

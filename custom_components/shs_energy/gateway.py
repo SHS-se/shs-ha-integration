@@ -295,7 +295,7 @@ class HomeAssistantSource:
             'admission':{'revision','bindings','pool_pause'}, 'live':{'after'},
             'catalog':set(), 'probe_sources':{'entities'}, 'device_room':{'device_key','meters','area_id'},
             'battery_capacity':set(), 'planning_power_bounds':{'mappings'},
-            'planning_device_draws':{'mappings'},
+            'planning_device_draws':{'mappings'}, 'vehicle_readiness':set(),
             'configure':{'expected_revision','revision','options','digest'},
             'statistics':{'start','end','entities','period','units','kinds'},
             'states':{'start','end','entities','with_attributes'}, 'forecast':{'entity'}}
@@ -313,6 +313,8 @@ class HomeAssistantSource:
             self.charge_run = None
         if operation == 'credentials':
             return dict(self.entry.data)
+        if operation == 'vehicle_readiness':
+            return await self.service.stream.call('load_record', 'ev_readiness')
         if operation == 'probe_sources':
             if not isinstance(body['entities'], list) or any(not isinstance(entity, str) for entity in body['entities']):
                 raise ValueError('Invalid probe source entities')

@@ -27,6 +27,7 @@ def source_bindings(options, models):
             if entity:
                 bindings.setdefault(entity, set()).add(role)
     use((options.get(key) for key in CAPTURE_KEYS), 'capture')
+    use((options.get('ev_location_entity'),), 'capture')
     use(planned_power_bindings(options, models).values(), 'capture')
     for category in COUNTERS:
         use(options.get('entities_'+category, ()), 'counter')

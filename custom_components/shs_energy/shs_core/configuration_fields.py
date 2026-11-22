@@ -626,6 +626,17 @@ def _configuration_sections(*, battery_control_required=False, house_control_req
                     domains=("sensor",),
                 ),
                 _field(
+                    c.OPT_EV_LOCATION_ENTITY,
+                    "Vehicle location",
+                    "entity",
+                    domains=("device_tracker",),
+                    help_text=(
+                        "Optional. Arriving home restarts the 60-hour charge-readiness "
+                        "clock; time away pauses it. When set, location controls this "
+                        "clock instead of cable connection."
+                    ),
+                ),
+                _field(
                     c.OPT_EV_TARGET_SOC_ENTITY,
                     "Vehicle charge limit",
                     "entity",

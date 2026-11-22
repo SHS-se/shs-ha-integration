@@ -108,6 +108,28 @@ const makePanel = () => {
   return panel;
 };
 
+test('vehicle location is optional, can be added, saved and removed in the shared editor', async () => {
+  const panel = makePanel();
+  panel._entryId = 'entry';
+  const field = {key: 'ev_location_entity', label: 'Vehicle location', kind: 'entity', domains: ['device_tracker'], required: false};
+  panel._data.sections = [{id: 'ev', title: 'Vehicle', fields: [field]}];
+  panel._data.entities = [{entity_id: 'device_tracker.synthetic_vehicle', name: 'Synthetic vehicle', domain: 'device_tracker'}];
+  assert.match(panel._renderSection(panel._data.sections[0]), /Add a setting/);
+  assert.match(panel._renderSection(panel._data.sections[0]), /Add vehicle location/);
+  assert.doesNotMatch(panel._renderSection(panel._data.sections[0]), /data-field-key="ev_location_entity"/);
+  panel._added.add('configuration::ev_location_entity');
+  assert.match(panel._renderSection(panel._data.sections[0]), /data-field-key="ev_location_entity"/);
+  panel._draft.ev_location_entity = 'device_tracker.synthetic_vehicle';
+  let sent;
+  panel._backend = {request: async payload => { sent = payload; }};
+  await panel._save();
+  assert.equal(sent.configuration.ev_location_entity, 'device_tracker.synthetic_vehicle');
+  panel._removeField('configuration', field.key);
+  await panel._save();
+  assert.equal(sent.configuration.ev_location_entity, null);
+  assert.match(panel._renderSection(panel._data.sections[0]), /Add vehicle location/);
+});
+
 test('clearing a populated source sends an explicit deletion', async () => {
   const panel = makePanel(); panel._entryId = 'entry';
   panel._data.sections = [{ fields: [{ key: 'weather' }] }];

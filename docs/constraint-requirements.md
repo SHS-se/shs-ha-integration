@@ -188,3 +188,16 @@ accepted plan. Only qualifying blocked work or recovery of previously
 suppressed work may force a replacement. See the
 [admission rules](authoritative-plan-contract.md#mandatory-automatic-trigger)
 and [live capacity thresholds](run-priority.md).
+
+# Vehicle location readiness — 22 November 2026
+
+An optional Vehicle location setting selects a Home Assistant device tracker.
+When configured, arriving `home` restarts the 60-hour readiness clock; any known
+non-home zone freezes its elapsed time. Replans, reports and app/HA restarts do
+not restart that clock. Cable state remains truthful execution telemetry and
+does not control this clock. Neither location nor cable removes future charging.
+Without this setting, the existing cable-based readiness behavior remains.
+Ordered location receipts and their derived clock commit together, shared by
+all planning backends. Missing readings never imply away or a fresh arrival:
+planning continues with an explicitly estimated mature readiness target until
+observations can repair it. Removing the setting returns to cable readiness.
