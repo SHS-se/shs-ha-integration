@@ -26,6 +26,7 @@ test('consumption keeps the same bottom-to-top order across plan days', async ({
       device_loads_w: Object.fromEntries(loads.map(load => [
         load.key, load.key === 'steady' && i < 5 ? (i % 2 ? 290 : 110) : load.values[i % 6],
       ])),
+      device_commands: Object.fromEntries(loads.map(load => [load.key, {type: 'switch_schedule', on_seconds: 900}])),
     }));
     await route.fulfill({json: state});
   });
@@ -185,6 +186,7 @@ test('schedule chart explains an interval, selects it and narrows to one day',as
       start:new Date(Math.floor(start/900000)*900000+i*900000).toISOString(),duration_hours:.25,binding:i<110,
       shadow_import_sek_per_kwh:1.4+Math.sin(i/14),shadow_export_sek_per_kwh:.6+Math.sin(i/14)/2,
       pv_w:5000*sun,base_w:900,device_loads_w:{pool_heater:on?2400:0,pool_pump:on?700:0},load_w:900+(on?3100:0),
+      device_commands:{pool_heater:{type:'switch_schedule',on_seconds:on?900:0},pool_pump:{type:'switch_schedule',on_seconds:on?900:0}},
       grid_import_w:on?2500:0,grid_export_w:sun>.6?1500:0,battery_charge_w:sun>.6?2000:0,battery_discharge_w:on?600:900,
       battery_soc:.2+.6*sun,ev_soc:.69,temperatures_c:{pool:29+i*.004,living_room:20.8+sun*.4},import_cost_sek:on?.9:0,export_revenue_sek:sun>.6?.2:0};});
     await route.fulfill({json:data});
