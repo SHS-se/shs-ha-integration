@@ -529,6 +529,34 @@ class HeatingExchangeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["heating_observations"], [row])
         self.assertEqual(self.rig.records.saved["heating_history_cursor"], pending)
 
+    async def test_database_timeout_is_visible_until_a_confirmed_history_receipt(self):
+        row = {"room_key": "room_a", "source_key": "source_a", "start": START.isoformat(), "duration_s": 3600}
+        old = {"rooms": {"room_a": {"source_key": "source_a", "signature": "synthetic", "before": START.isoformat()}}}
+        pending = {"rooms": {"room_a": {**old["rooms"]["room_a"], "before": (START-timedelta(hours=1)).isoformat()}}}
+        self.rig.records.saved["heating_history_cursor"] = old
+        self.h._heating_history_upload = AsyncMock(return_value=([row], [], pending))
+        detail = "Heating history: the server database write timed out. SHS will retry automatically."
+        self.h.client.submit_optimisation.return_value = {"heating_observations_accepted": None,
+            "heating_observations_accepted_by_source": None, "heating_probe_observations_accepted": 0,
+            "heating_history_errors": [detail]}
+        await self.h.async_optimisation_push(force_plan=True)
+        self.assertEqual(self.rig.records.saved["heating_history_cursor"], old)
+        issue = next(item for item in self.h.attention_items if item["key"] == "pipeline:heating_inputs")
+        self.assertEqual(issue["detail"], detail)
+        self.assertEqual(issue["severity"], "warning")
+        self.assertIn("snapshot", self.h.client.submit_optimisation.call_args.args[0])
+
+        async def accepted(_body):
+            # A successful read and the start of a retry cannot clear a failed write.
+            self.assertTrue(any(item["key"] == "pipeline:heating_inputs" for item in self.h.attention_items))
+            return {"heating_observations_accepted": 1, "heating_probe_observations_accepted": 0,
+                "heating_observations_accepted_by_source": [{"room_key": "room_a", "source_key": "source_a", "accepted": 1}],
+                "heating_history_errors": []}
+        self.h.client.submit_optimisation.side_effect = accepted
+        await self.h.async_optimisation_push(force_plan=True)
+        self.assertEqual(self.rig.records.saved["heating_history_cursor"], pending)
+        self.assertFalse(any(item["key"] == "pipeline:heating_inputs" for item in self.h.attention_items))
+
     async def test_normal_owner_captures_recent_and_older_windows_without_overlap(self):
         devices, mappings, rooms = source_fixture()
         self.rig.options.update(rooms=rooms, device_control_mappings=mappings,

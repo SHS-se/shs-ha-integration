@@ -95,7 +95,12 @@ The global attention notice remains above Overview, Schedule, Controller,
 System and Settings, including retained snapshots and interrupted startup.
 Identify the affected stage or device and the reason, with the existing field,
 source-entity, website or diagnostic action. A retained valid plan is still
-shown, alongside failures affecting its execution or replacement.
+shown, alongside failures affecting its execution or replacement. Keep each
+stage/device and its reason visible in a compact summary. Recovery actions and
+diagnostic downloads expand per issue so repeated notices do not cover the
+schedule on a phone. Optional heating-history retries are warnings and identify
+server write failures separately from unavailable Recorder reads or rejected
+source receipts.
 
 Clear each failure only when that same stage succeeds or its own execution
 status recovers. A telemetry upload does not prove plan delivery, acceptance or

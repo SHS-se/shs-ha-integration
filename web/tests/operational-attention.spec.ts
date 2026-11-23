@@ -23,6 +23,7 @@ test('failures stay prominent on every screen while a retained plan remains avai
   await page.getByRole('link',{name:'Plan',exact:true}).click();
   await expect(page.getByRole('heading',{name:'Your energy schedule'})).toBeVisible();
   await page.screenshot({path:`test-results/${info.project.name}-operational-failures.png`,fullPage:true});
+  await notice.locator('article').first().locator('summary').click();
   await page.getByRole('link',{name:'Download app logs'}).first().focus();
   await expect(page.getByRole('link',{name:'Download app logs'}).first()).toBeFocused();
 });
@@ -50,6 +51,7 @@ test('correction links focus real editors and one correction does not clear anot
     await route.fulfill({json:{saved:true,refreshing:false,revision:body.expected_revision+1}});
   });
   await page.goto('./#system');
+  await page.locator('.operational-attention article').filter({hasText:field.title}).locator('summary').click();
   await page.getByRole('link',{name:'Choose house power',exact:true}).click();
   const editor=page.locator('shs-configuration-editor');
   const control=editor.getByRole('combobox',{name:'Instantaneous house consumption',exact:true});
@@ -75,6 +77,7 @@ test('source inspection works from Settings and startup failures need no snapsho
   });
   await page.goto('./#settings');
   await expect(page.locator('shs-configuration-editor')).toBeVisible();
+  await page.locator('.operational-attention summary').click();
   await page.getByRole('link',{name:'Inspect source entity',exact:true}).click();
   await expect(page.getByRole('dialog',{name:'Source entity'})).toBeVisible();
   await expect(page.getByRole('dialog')).toContainText('sensor.forecast');
@@ -101,6 +104,7 @@ test('a suspected stuck temperature links to the source and clears after recover
   const notice=page.getByRole('status',{name:'SHS needs attention'});
   await expect(notice).toContainText(warning.detail);
   await expect(page.locator('.connection')).toHaveText('Connected');
+  await notice.locator('summary').click();
   await notice.getByRole('link',{name:'Inspect source entity'}).click();
   await expect(page.getByRole('dialog',{name:'Source entity'})).toContainText(entity);
   await page.getByRole('dialog').getByRole('button',{name:'Close',exact:true}).click();
@@ -127,4 +131,32 @@ test('execution replanning is automatic and future car charging stays conditiona
   await expect(notice).toContainText('Other executable loads keep their commitments for the next hour.');
   await expect(editor.getByText('Manual replan recommended',{exact:true})).toHaveCount(0);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
+});
+
+test('two history retries keep their reasons visible without covering the phone screen',async({page},info)=>{
+  const history={key:'pipeline:heating_inputs',severity:'warning',stage:'heating_inputs',
+    title:'Heating history upload is retrying',
+    detail:'Heating history: the server database write timed out. SHS will retry automatically.',
+    next_step:'Planning and execution continue. SHS retries history automatically; inspect status if the problem persists.',
+    fix:{kind:'diagnostics'}};
+  await page.route('**/api/state',async route=>{
+    const data=await(await route.fetch()).json();
+    data.attention=[history,{...history,key:'backend:test:pipeline:heating_inputs',title:'Test: '+history.title}];
+    await route.fulfill({json:data});
+  });
+  await page.goto('./');
+  const notice=page.getByRole('status',{name:'SHS needs attention'});
+  await expect(notice.getByText(history.detail,{exact:true})).toHaveCount(2);
+  await expect(notice.getByText(history.detail,{exact:true}).first()).toBeVisible();
+  await expect(notice.locator('details[open]')).toHaveCount(0);
+  await expect(notice.getByRole('link',{name:'Download app logs'})).toHaveCount(0);
+  const box=await notice.boundingBox();
+  expect(box?.height).toBeLessThan(450);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
+  const summary=notice.locator('summary').first();
+  await summary.focus();await page.keyboard.press('Enter');
+  await expect(notice.getByRole('link',{name:'Download app logs'})).toBeVisible();
+  await expect(notice).toContainText('Planning and execution continue.');
+  await summary.press('Enter');
+  await page.screenshot({path:`test-results/${info.project.name}-history-retries.png`,fullPage:true});
 });

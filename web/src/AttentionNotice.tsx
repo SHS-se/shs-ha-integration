@@ -6,7 +6,8 @@ export function AttentionNotice({items}:{items:Attention[]}) {
   return <section className={`notice operational-attention ${critical?'critical':''}`} aria-label="SHS needs attention" role={critical?'alert':'status'}>
     <h2>SHS needs attention</h2>
     {items.map(item=><article className="issue" key={item.key} data-stage={item.stage}>
-      <h3>{item.title||'Operation needs attention'}</h3><p>{item.detail}</p>
+      <details>
+      <summary><h3>{item.title||'Operation needs attention'}</h3><p>{item.detail}</p><span className="issue-toggle">Details and recovery</span></summary>
       {item.items&&item.items.length>0&&<ul>{item.items.map((text,index)=><li key={index}>{text}</li>)}</ul>}
       {item.next_step&&<p>{item.next_step}</p>}
       <div className="issue-actions">
@@ -17,6 +18,7 @@ export function AttentionNotice({items}:{items:Attention[]}) {
         {!item.fix?.fields?.length&&!['entity','entities'].includes(item.fix?.kind||'')&&!item.fix?.url&&<a className="button" href="#settings?tab=status">Inspect status</a>}
         {item.fix?.kind==='diagnostics'&&<><a className="button" href="./api/diagnostics/controller.json.gz" download>Download controller diagnostics</a><a className="button" href="./api/diagnostics/app-logs.zip" download>Download app logs</a></>}
       </div>
+      </details>
     </article>)}
   </section>;
 }

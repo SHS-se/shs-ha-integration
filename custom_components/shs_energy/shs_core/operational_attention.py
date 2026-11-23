@@ -11,7 +11,7 @@ STAGES = {
     'inputs': ('Planning data could not be collected', 'Inspect the reported source. SHS needs usable inputs to request a plan.'),
     'collection': ('Household readings could not be collected', 'Inspect the reported source. The next upload needs usable readings.'),
     'room_observations': ('Room readings could not be shared', 'Check the Room connections and temperature probe in Settings.'),
-    'heating_inputs': ('Heating history could not be collected', 'Inspect the reported source. Planning continues with the measured history already available.'),
+    'heating_inputs': ('Heating history upload is retrying', 'Planning and execution continue. SHS retries history automatically; inspect status if the problem persists.'),
     'thermal_inputs': ('Room observations could not be collected', 'Inspect the reported source. Other household data can still be sent.'),
     'pool_inputs': ('Pool observations could not be collected', 'Inspect the reported source. Other household data can still be sent.'),
     'upload': ('Planning data could not be sent', 'Check the server connection. A new plan cannot be requested until the upload succeeds.'),
@@ -40,7 +40,7 @@ def pipeline_issue(stage, detail, *, fix=None, key=None):
         next_step = 'Correct the reported authorization or contract failure. The last accepted plan remains subject to its existing validity.'
     if stage == 'delivery' and getattr(detail, 'code', None) == 'planning_job_not_found':
         next_step = 'The server no longer has this job. Request a new plan. Devices hold the last settings SHS sent.'
-    return dict(key='pipeline:'+(key or stage), stage=stage, severity='error', title=title,
+    return dict(key='pipeline:'+(key or stage), stage=stage, severity='warning' if stage == 'heating_inputs' else 'error', title=title,
                 detail=str(detail), next_step=next_step, fix=deepcopy(fix or {'kind':'diagnostics'}))
 
 

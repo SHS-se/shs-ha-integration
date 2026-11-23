@@ -4331,9 +4331,12 @@ class Household:
                     self._pipeline_error('heating_inputs', err, fix=getattr(err, 'fix', None))
                 else:
                     deferred = (pending_heating_history or {}).get('deferred_rooms', [])
-                    self._pipeline_error('heating_inputs', HouseholdReadError(
-                        f"Heating history is waiting for recorded power evidence for {len(deferred)} room(s); planning continues")
-                        if deferred else None)
+                    if deferred:
+                        self._pipeline_error('heating_inputs', HouseholdReadError(
+                            f"Heating history is waiting for recorded power evidence for {len(deferred)} room(s); planning continues"))
+                    elif pending_heating_history is None:
+                        # No configured heating sources remain to upload.
+                        self._pipeline_error('heating_inputs', None)
                 try:
                     pool_slots = (await self._pool_quarters(
                         thermal_options, thermal_start, complete_end
@@ -4586,8 +4589,21 @@ class Household:
                             and result["heating_probe_observations_accepted"] == len(heating_probe_observations or [])
                             and not pending_heating_history.get("probe_capture", {}).get("read_failed_windows"))
                 if not pending_heating_history.get("deferred_rooms"):
-                    self._pipeline_error("heating_inputs", None if complete else ValueError(
-                        "Some heating history sources were not accepted; those rooms will be retried."))
+                    if complete:
+                        self._pipeline_error("heating_inputs", None)
+                    else:
+                        errors = result.get("heating_history_errors", [])
+                        if errors:
+                            detail = " ".join(errors)
+                        elif pending_heating_history.get("probe_capture", {}).get("read_failed_windows"):
+                            detail = "Some temperature probe history could not be read from Home Assistant; SHS will retry automatically."
+                        elif result.get("heating_observations_accepted") is None:
+                            detail = "The server could not store the heating history upload; SHS will retry automatically."
+                        elif result.get("heating_probe_observations_accepted") != len(heating_probe_observations or []):
+                            detail = "The server did not confirm all temperature probe history; SHS will retry automatically."
+                        else:
+                            detail = "The server did not confirm all heating history sources; SHS will retry the affected rooms automatically."
+                        self._pipeline_error("heating_inputs", ValueError(detail))
             if result.get("thermal_slots_accepted_until"):
                 stored["thermal_slots_accepted_until"] = result[
                     "thermal_slots_accepted_until"
