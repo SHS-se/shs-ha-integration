@@ -33,7 +33,10 @@ def device_intent(device, operation, plan, slot, *, configuration_revision, poli
             if slot.get('hold_spare_increase'):
                 parameters['hold_spare_increase'] = True
         elif device == 'pool':
-            parameters.update(heating_w=pool_requested_w(plan, slot), stop_temperature_c=plan['pool']['stop_temperature_c'],
+            stop = (plan.get('pool') or {}).get('stop_temperature_c')
+            if stop is None:
+                stop = plan.get('retained_pool_stop_temperature_c')
+            parameters.update(heating_w=pool_requested_w(plan, slot), stop_temperature_c=stop,
                               pool_permitted=pool_permission(plan, slot),
                               models=plan['device_models'])
         elif device.startswith('device:'):

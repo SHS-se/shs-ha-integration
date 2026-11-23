@@ -43,6 +43,7 @@ PURE_MODULES = (
     "shs_core.device_controls",
     "shs_core.device_setup",
     "shs_core.device_commands",
+    "shs_core.service_continuity",
     "shs_core.hot_water",
     "migration",
     "shs_core.network_traffic",

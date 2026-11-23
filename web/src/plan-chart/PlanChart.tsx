@@ -19,6 +19,7 @@ import {
 import {PRICE_RAMP_STEPS, priceBands, priceGradientStops} from './price-bands';
 import {powerFlowMagnitudes} from './power-flows';
 import {orderConsumptionStack} from './consumption-stack-order';
+import {scheduledConsumption} from './device-instructions';
 import type {Plan, Slot, Temperature} from '../types';
 import './plan-chart.css';
 
@@ -162,16 +163,17 @@ export function PlanChart({slots, plan, selectedIndex = -1, onSelect}: {
 
     // Colours follow the plan's device list, not the ones running today, so a
     // meter keeps its colour from one plan to the next.
+    const consumption = scheduledConsumption(slots, plan.devices);
     const listed = plan.devices.map(device => device.key);
     const seen = [...new Set(slots.flatMap(slot => Object.keys(slot.device_loads_w ?? {})))];
     const order = [...listed.filter(key => seen.includes(key)), ...seen.filter(key => !listed.includes(key))];
-    const running = order.filter(key => slots.some(slot => (slot.device_loads_w?.[key] ?? 0) > 0));
+    const running = order.filter(key => consumption.some(slot => (slot.device_loads_w?.[key] ?? 0) > 0));
     const series = orderConsumptionStack<LoadSeries>(running.map(key => ({
       key, slot: order.indexOf(key) % 9,
       name: displayName(key, plan.devices.find(device => device.key === key)?.name),
-      values: slots.map(slot => slot.device_loads_w?.[key] ?? null),
+      values: consumption.map(slot => slot.device_loads_w?.[key] ?? null),
     })));
-    const base = slots.map(slot => slot.base_w);
+    const base = consumption.map(slot => slot.base_w);
 
     return {days, series, base};
   }, [clock, plan.devices, slots]);

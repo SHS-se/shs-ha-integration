@@ -6,6 +6,7 @@ from .const import *
 from .operating_modes import device_mode
 from .presentation import controller_explanation
 from .supplier import current_supplier_prices
+from .service_continuity import retained_service_instruction
 
 class ShsBaseSensor:
     _attr_entity_category = 'diagnostic'
@@ -183,7 +184,7 @@ class ShsEvPlanCurrentSensor(ShsBaseSensor):
     @property
     def native_value(self) -> float | None:
         (plan, slot) = self.planned_request('ev')
-        if slot is None or not plan.get('capabilities', {}).get('ev'):
+        if slot is None or not (plan.get('capabilities', {}).get('ev') or retained_service_instruction(plan, slot, 'ev')):
             return None
         return float(slot['ev_target_current_a'])
 

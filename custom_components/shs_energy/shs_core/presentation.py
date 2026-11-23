@@ -8,6 +8,7 @@ from .const import OPT_DEVICE_CATEGORY_OVERRIDES
 from .device_controls import planning_path, device_planning_path, battery_control_errors, pool_control_errors
 from .device_commands import execution_setup_errors, slot_command
 from .hot_water import FINISH_HEATING_W, is_hot_water, hot_water_setup_errors
+from .service_continuity import retained_service_instruction
 
 
 
@@ -234,7 +235,8 @@ def complete_device_views(devices, options, choices, status, plan, controllers, 
         elif system or member:
             left_out = [issue.get("reason") for issue in (plan or {}).get("measurement_issues") or []
                         if isinstance(issue, dict) and issue.get("device") == (system or member)]
-            planning_reason = (None if active and (plan or {}).get("capabilities", {}).get(system or member)
+            planning_reason = (None if active and ((plan or {}).get("capabilities", {}).get(system or member)
+                               or retained_service_instruction(plan, active, system or member))
                                else "Left out of the current plan: " + " ".join(left_out) if left_out
                                else "Waiting for a plan for this device")
         else:

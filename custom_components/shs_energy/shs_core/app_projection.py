@@ -9,7 +9,7 @@ SLOT_FIELDS = (
     "grid_import_w", "grid_export_w", "battery_charge_w", "battery_discharge_w",
     "battery_soc", "ev_soc", "ev_soc_from_charging", "import_cost_sek", "export_revenue_sek",
     "device_loads_w", "device_commands", "battery_command", "ev_w", "pool_w",
-    "boiler_expected_w", "room_heating_w",
+    "boiler_expected_w", "room_heating_w", "pool_permitted",
 )
 
 
@@ -40,7 +40,7 @@ def schedule(plan, operation):
         "currency": "SEK",  # The current API contract explicitly uses *_sek fields.
         "household": series(plan),
         "execution": series(plan["execution_plan"]) if plan.get("execution_plan") else None,
-        "devices": [{key: d.get(key) for key in ("key", "name", "category")}
+        "devices": [{key: d.get(key) for key in ("key", "name", "category", "planning_service", "pool_role", "active_power_w")}
                     for d in plan.get("device_models", [])],
     }
 

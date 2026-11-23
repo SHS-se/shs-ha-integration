@@ -39,7 +39,10 @@ def pool_requested_w(plan, slot):
     if 'pool_permitted' in slot and slot['pool_permitted'] is None:
         raise ValueError('No new pool instruction; existing settings are retained')
     response = (plan.get("pool") or {}).get("heater_response")
-    return slot["pool_command_w"] if (plan.get("pool") or {}).get("planning_basis") == "empirical" or response and response["kind"] == "bergvarme" else slot["pool_w"]
+    explicit = (plan.get("retained_pool_stop_temperature_c") is not None
+                or (plan.get("pool") or {}).get("planning_basis") == "empirical"
+                or response and response["kind"] == "bergvarme")
+    return slot["pool_command_w"] if explicit else slot["pool_w"]
 
 
 def pool_permission(plan, slot):

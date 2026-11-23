@@ -20,8 +20,9 @@ export type Slot = {
   device_loads_w: Record<string,number>|null;
   device_commands: Record<string,unknown>|null; battery_command: unknown;
   ev_w: number|null; pool_w: number|null; boiler_expected_w: number|null;
+  pool_permitted?: boolean|null;
 };
-export type Plan = {plan_id:string; issued_at:string; valid_until:string; binding_until:string; timezone:string; currency:string; temperatures:Temperature[]; household:Slot[]; execution:Slot[]|null; devices:{key:string; name:string; category:string}[]};
+export type Plan = {plan_id:string; issued_at:string; valid_until:string; binding_until:string; timezone:string; currency:string; temperatures:Temperature[]; household:Slot[]; execution:Slot[]|null; devices:{key:string; name:string; category:string; planning_service?:string|null; pool_role?:string|null; active_power_w?:number|null}[]};
 export type Measurement = {value:number|null; unit:string; entity_id:string|null; observed_at:string|null};
 export type Attention = {key:string; severity:'error'|'warning'|'info'; stage?:string; title?:string; detail?:string; items?:string[]; next_step?:string; fix?:{kind?:string;entity_id?:string;entity_ids?:string[];url?:string;fields?:{key:string; message?:string; url:string}[]}};
 export type Entry = {id:string; title:string; state:string; accuracy?:AccuracyReport|null; accuracy_error?:string|null; input_accuracy?:InputAccuracy|null; operation?:{state:string; label?:string; reason:string}; schedule?:Plan|null; controllers?:Record<string,{state:string;reason?:string;[key:string]:unknown}>; measurements?:Record<string,Measurement>; attention?:Attention[]};

@@ -1,5 +1,15 @@
 # Requirements for planner and controller constraints
 
+User requirement, 22 November 2026: an unavailable planning observation must not
+erase a compatible accepted instruction for its original interval. Retained EV
+requests carry their explicit current envelope and typed meter command; retained
+pool requests carry their explicit permission, commanded draw and accepted stop
+temperature. Neither requires a fabricated store projection. Execution still holds
+while a required live reading is unavailable and resumes when it returns. Uncovered
+intervals hold the last setting without manufacturing an OFF request. Both charts
+keep forecasts without instructions in background household demand. Explicit user
+permissions, equipment limits and execution releases remain authoritative.
+
 User requirement, 17 September 2026. This decision supersedes earlier proposals
 for invented validity bounds or timestamp-based event ordering.
 

@@ -40,6 +40,7 @@ from .device_operations import (DeviceOperations, ControlObservationError, Actua
 
 
 from .heating_overrides import active_heating
+from .service_continuity import retained_service_instruction
 
 
 class ScheduledController(DeviceOperations):
@@ -670,7 +671,8 @@ class ScheduledController(DeviceOperations):
                             self.report(device, **result)
                             continue
                         supported = (plan.get("schema_version", 0) >= 7 and device.removeprefix("device:") in slot.get("device_commands", {})
-                                     if device.startswith("device:") and slot else plan.get("capabilities", {}).get(device))
+                                     if device.startswith("device:") and slot else plan.get("capabilities", {}).get(device)
+                                     or retained_service_instruction(plan, slot, device))
                         if not slot or not supported:
                             self.report(device, "idle", reason=self.holding(device, "No current plan for this device"),
                                         execution_blocked=controlling, needs_attention=controlling)

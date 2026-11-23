@@ -845,6 +845,8 @@ class DeviceOperations:
             raise ValueError(f"{entity}: pool control must report on or off")
         target = (plan.get("pool") or {}).get("stop_temperature_c")
         if target is None:
+            target = plan.get("retained_pool_stop_temperature_c")
+        if target is None:
             error = ControlObservationError(
                 "The plan is missing the pool's Stop at temperature.", None,
                 "Refresh the plan after updating the planner. If this continues, check the website's pool preference and download diagnostics.")
