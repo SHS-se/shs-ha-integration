@@ -66,6 +66,9 @@ class HeatingHistorySources:
     device_power_statistics: dict[str, str] = field(default_factory=dict)
     counter_epochs: dict[str, tuple[str | None, str | None]] = field(default_factory=dict)
     counter_qualification: dict[str, object] = field(default_factory=dict)
+    # Heat pumps (heating devices set up as inverter loads) whose power peak is
+    # captured beside their energy, so the website can learn start-up peaks.
+    peak_device_keys: tuple[str, ...] = ()
 
     def for_room(self, binding: HeatingRoomBinding) -> HeatingHistorySources:
         return HeatingHistorySources([binding],
@@ -73,11 +76,22 @@ class HeatingHistorySources:
             self.room_air_probes, self.outdoor_entity, self.lineage_revision,
             {key: self.device_power_statistics[key] for key in binding.device_keys if key in self.device_power_statistics},
             {key: self.counter_epochs[key] for key in binding.device_keys if key in self.counter_epochs},
-            {key: self.counter_qualification[key] for key in binding.device_keys if key in self.counter_qualification})
+            {key: self.counter_qualification[key] for key in binding.device_keys if key in self.counter_qualification},
+            tuple(key for key in self.peak_device_keys if key in binding.device_keys))
+
+    @property
+    def peak_statistics(self) -> dict[str, str]:
+        """Each heat pump's power entity, whose maximum is its interval peak."""
+        return {key: self.device_power_statistics[key] for key in self.peak_device_keys
+                if key in self.device_power_statistics}
 
     @property
     def signature(self) -> str:
         identity = {"revision": 1, "counter_processing_revision": COUNTER_PROCESSING_REVISION, **asdict(self)}
+        # A home without heat pumps keeps its identity; one with them sends
+        # its retained history again once, now with peaks.
+        if not identity["peak_device_keys"]:
+            del identity["peak_device_keys"]
         return sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
@@ -129,7 +143,10 @@ def heating_history_sources(devices, mappings, rooms, read_state, *, outdoor_ent
     statistics = {key: statistics[key] for binding in bindings for key in binding.device_keys if key in statistics}
     powers = {key: mappings[key]['power'] for key in statistics if isinstance(mappings.get(key), dict)
               and isinstance(mappings[key].get('power'), str) and mappings[key]['power']}
-    return HeatingHistorySources(bindings, statistics, probes, outdoor_entity, device_power_statistics=powers)
+    heat_pumps = tuple(sorted(str(device["key"]) for device in heating
+                              if device.get("load_type") == "inverter" and str(device["key"]) in powers))
+    return HeatingHistorySources(bindings, statistics, probes, outdoor_entity, device_power_statistics=powers,
+                                 peak_device_keys=heat_pumps)
 
 
 def heating_recent_window(sources: HeatingHistorySources, cursor, end: datetime, *, room_count=None):
@@ -302,6 +319,25 @@ def _temperature_means(rows, start: datetime, end: datetime, seconds: int):
     return quarter_means(values, min_coverage=1.0) if seconds == 300 else dict(values)
 
 
+def _power_peaks(rows, start: datetime, end: datetime, seconds: int):
+    """Highest power per native interval; a quarter needs all three five-minute maxima."""
+    values = {}
+    for row in rows:
+        at, value = _time(row.get("start")), _number(row.get("max"))
+        if at is None or value is None or value < 0 or at < start or at + timedelta(seconds=seconds) > end \
+                or at.timestamp() % seconds:
+            continue
+        finish = _time(row.get("end"))
+        if finish is not None and finish != at + timedelta(seconds=seconds):
+            continue
+        values[at] = value
+    if seconds == 3600:
+        return {at: round(value, 1) for at, value in values.items()}
+    quarters = {at.replace(minute=at.minute // 15 * 15) for at in values}
+    return {at: round(max(values[at + timedelta(minutes=offset)] for offset in (0, 5, 10)), 1)
+            for at in quarters if all(at + timedelta(minutes=offset) in values for offset in (0, 5, 10))}
+
+
 def _energy_intervals(rows, start: datetime, end: datetime, seconds: int):
     values = {at.astimezone(timezone.utc): number for at, value in rows
               if (number := _number(value)) is not None and number >= 0
@@ -350,6 +386,7 @@ async def capture_heating_history(
     room_air_probes: Mapping[str, str], outdoor_entity: str | None,
     start: datetime, end: datetime,
     probe_topology: Mapping[str, Any] | None = None,
+    peak_statistics: Mapping[str, str] | None = None,
 ) -> HeatingHistoryCapture:
     """Capture a caller-bounded window without changing planning or raw actuals.
 
@@ -359,6 +396,8 @@ async def capture_heating_history(
     An hour uses four complete fine observations when possible, otherwise one
     complete native hour. Partial finer evidence survives when no complete hour
     is available. Every selected row states its actual interval and meter IDs.
+    A heat pump in ``peak_statistics`` also states its highest power reading
+    for each interval whose Recorder maxima cover all of it.
     """
     for binding in bindings:
         if not isinstance(binding.heater_limits_w, Mapping) or any(
@@ -374,7 +413,9 @@ async def capture_heating_history(
         probes.add(outdoor_entity)
     meters = sorted({device_statistics[key] for binding in bindings for key in binding.device_keys
                      if key in device_statistics})
-    temperatures, energies, houses, invalidated, bounds = {}, {}, {}, {}, {}
+    temperatures, energies, houses, invalidated, bounds, peaks = {}, {}, {}, {}, {}, {}
+    peak_entities = dict(peak_statistics or {})
+    peak_failures = 0
     topology = probe_topology or {}
     companions = {entity for metadata in topology.values() for entity in metadata.get("companions", [])} - probes
     probe_failures = 0
@@ -395,6 +436,14 @@ async def capture_heating_history(
                 probe_failures += 1
         bounds[duration] = {entity: native_probe_bounds(rows, read_start, end, seconds)
                             for entity, rows in {**raw, **companion_rows}.items()}
+        peak_rows = {}
+        if peak_entities:
+            try:
+                peak_rows = await history.statistics(start, end, set(peak_entities.values()), period, {"power": "W"}, {"max"})
+            except HouseholdReadError:
+                # Energy stays the primary evidence; the window is retried for its peaks.
+                peak_failures += 1
+        peaks[duration] = {entity: _power_peaks(rows, start, end, seconds) for entity, rows in peak_rows.items()}
         cleaned = await read_energy(meters, start, end, period)
         energies[duration] = {entity: _energy_intervals(rows, start, end, seconds)
                              for entity, rows in cleaned.items()}
@@ -431,7 +480,10 @@ async def capture_heating_history(
             if room is None and not own_withdrawal and not any(value is not None for value in recorded.values()):
                 return None
             steps = [at + offset * QUARTER for offset in range(duration // 900)]
-            return {"room_key": binding.room_key, "source_key": binding.source_key,
+            peak = {key: value for key in keys if key in peak_entities
+                    and (value := peaks[duration].get(peak_entities[key], {}).get(at)) is not None}
+            return {**({"device_peak_w": peak} if peak else {}),
+                    "room_key": binding.room_key, "source_key": binding.source_key,
                     "start": at.isoformat(), "duration_s": duration,
                     "source": "recorder_5minute_mean" if duration == 900 else "recorder_hour_mean",
                     "room_temperature_c": room,
@@ -479,4 +531,6 @@ async def capture_heating_history(
                 topology, bounds[duration], temperatures[duration]) for at, duration in buckets]
     if probe_failures:
         counts["probe_evidence_read_failures"] = probe_failures
+    if peak_failures:
+        counts["peak_read_failures"] = peak_failures
     return HeatingHistoryCapture(observations, dict(counts), facts)

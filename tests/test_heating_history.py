@@ -603,3 +603,131 @@ class HeatingExchangeTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def power(at, seconds, maximum):
+    return {"start": at.timestamp(), "end": (at + timedelta(seconds=seconds)).timestamp(), "max": maximum}
+
+
+async def capture_peaks(recorder, *, start=START, end=None):
+    household = owner(recorder)
+    return await household.capture_heating_history(
+        read_energy=household._statistics_changes, bindings=[binding()],
+        device_statistics={"heater": "sensor.energy_a"}, room_air_probes=PROBES, outdoor_entity="sensor.outdoors",
+        start=start, end=end or start + timedelta(hours=1), peak_statistics={"heater": "sensor.power_a"})
+
+
+class HeatPumpPeakTests(unittest.IsolatedAsyncioTestCase):
+    """A heat pump's start-up peak rides on the interval that carries its energy."""
+
+    async def test_each_quarter_states_its_highest_five_minute_maximum(self):
+        recorder = Recorder()
+        recorder.temperatures("hour")
+        recorder.temperatures("5minute", count=12)
+        recorder.energy("sensor.energy_a", "hour", [1.2])
+        recorder.energy("sensor.energy_a", "5minute", [.1] * 12)
+        maxima = [45, 2900, 2100, 1400, 1300, 1200, 1100, 1000, 1000, 1000, 1000, 1000]
+        recorder.rows["5minute"]["sensor.power_a"] = [power(START + timedelta(minutes=5 * i), 300, value)
+                                                      for i, value in enumerate(maxima)]
+        result = await capture_peaks(recorder)
+        self.assertEqual([row["device_peak_w"] for row in result.observations],
+                         [{"heater": 2900}, {"heater": 1400}, {"heater": 1100}, {"heater": 1000}])
+
+    async def test_a_quarter_missing_a_maximum_states_no_peak_and_keeps_its_energy(self):
+        recorder = Recorder()
+        recorder.temperatures("hour")
+        recorder.temperatures("5minute", count=12)
+        recorder.energy("sensor.energy_a", "hour", [1.2])
+        recorder.energy("sensor.energy_a", "5minute", [.1] * 12)
+        recorder.rows["5minute"]["sensor.power_a"] = [power(START + timedelta(minutes=5 * i), 300, 1000)
+                                                      for i in range(12) if i != 1]
+        result = await capture_peaks(recorder)
+        self.assertNotIn("device_peak_w", result.observations[0])
+        self.assertEqual(result.observations[0]["device_energy_kwh"], {"heater": .1 * 3})
+        self.assertEqual(result.observations[1]["device_peak_w"], {"heater": 1000})
+
+    async def test_an_old_hour_states_its_hourly_maximum(self):
+        recorder = Recorder()
+        recorder.temperatures("hour")
+        recorder.energy("sensor.energy_a", "hour", [1.5])
+        recorder.rows["hour"]["sensor.power_a"] = [power(START, 3600, 2871.94)]
+        result = await capture_peaks(recorder)
+        self.assertEqual([(row["duration_s"], row["device_peak_w"]) for row in result.observations],
+                         [(3600, {"heater": 2871.9})])
+
+    async def test_an_unreadable_peak_keeps_the_energy_and_asks_for_the_window_again(self):
+        recorder = Recorder()
+        recorder.temperatures("hour")
+        recorder.energy("sensor.energy_a", "hour", [1.5])
+        statistics = recorder.statistics
+
+        async def failing(start, end, entities, period, units, kinds):
+            if "sensor.power_a" in entities:
+                raise HouseholdReadError("synthetic recorder timeout")
+            return await statistics(start, end, entities, period, units, kinds)
+        recorder.statistics = failing
+        result = await capture_peaks(recorder)
+        self.assertEqual(result.observations[0]["device_energy_kwh"], {"heater": 1.5})
+        self.assertNotIn("device_peak_w", result.observations[0])
+        self.assertEqual(result.diagnostics["peak_read_failures"], 2)
+
+
+class HeatPumpSourceTests(unittest.TestCase):
+    def test_only_an_inverter_heater_with_a_power_sensor_is_a_heat_pump(self):
+        devices, mappings, rooms = source_fixture()
+        mappings["heater"]["power"] = "sensor.power_a"
+        modes = lambda _: SimpleNamespace(attributes={"hvac_modes": ["heat", "cool", "off"]})
+        plain = heating_history_sources(devices, mappings, rooms, modes)
+        self.assertEqual(plain.peak_device_keys, ())
+        pump = heating_history_sources([{**devices[0], "load_type": "inverter"}], mappings, rooms, modes)
+        self.assertEqual(pump.peak_statistics, {"heater": "sensor.power_a"})
+        self.assertEqual(pump.for_room(pump.bindings[0]).peak_device_keys, ("heater",))
+        # The home with a heat pump sends its history again once, with peaks.
+        self.assertNotEqual(pump.signature, plain.signature)
+        del mappings["heater"]["power"]
+        self.assertEqual(heating_history_sources([{**devices[0], "load_type": "inverter"}], mappings, rooms,
+                                                 modes).peak_device_keys, ())
+
+    def test_a_home_without_heat_pumps_keeps_its_history_identity(self):
+        from dataclasses import asdict
+        import json
+        from shs_core.counter_reading import COUNTER_PROCESSING_REVISION
+        devices, mappings, rooms = source_fixture()
+        value = heating_history_sources(devices, mappings, rooms,
+            lambda _: SimpleNamespace(attributes={"hvac_modes": ["heat", "off"]}))
+        identity = {"revision": 1, "counter_processing_revision": COUNTER_PROCESSING_REVISION, **asdict(value)}
+        del identity["peak_device_keys"]
+        before = sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        self.assertEqual(value.signature, before)
+
+
+class HeatPumpPeakExchangeTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        import test_planning_jobs as jobs
+        jobs.PlanningJobTests.setUp(self)
+
+    async def test_the_server_says_once_that_it_stores_peaks(self):
+        self.h._heating_history_upload = AsyncMock(return_value=(None, None, None))
+        self.h.client.submit_optimisation.return_value = {}
+        await self.h.async_optimisation_push(force_plan=True)
+        self.assertNotIn("heating_power_peaks_supported", self.rig.records.saved)
+        self.h.client.submit_optimisation.return_value = {"heating_power_peaks_supported": True}
+        await self.h.async_optimisation_push(force_plan=True)
+        self.assertIs(self.rig.records.saved["heating_power_peaks_supported"], True)
+
+    async def test_peaks_are_captured_only_once_the_server_stores_them(self):
+        devices, mappings, rooms = source_fixture()
+        mappings["heater"]["power"] = "sensor.power_a"
+        devices = [{**devices[0], "load_type": "inverter"}]
+        seen = []
+
+        async def stop(history, sources, lineage, ledger, end):
+            seen.append(sources.peak_device_keys)
+            raise HouseholdReadError("synthetic stop after source resolution")
+        options = {"rooms": rooms, "device_control_mappings": mappings}
+        with patch("shs_core.household.prepare_heating_counter_evidence", stop):
+            for stored in ({}, {"heating_power_peaks_supported": True}):
+                with self.assertRaises(HouseholdReadError):
+                    await self.h._heating_history_upload(options, devices, START, None, stored=stored)
+        # Until the server confirms, the history identity and its re-send are unchanged.
+        self.assertEqual(seen, [(), ("heater",)])

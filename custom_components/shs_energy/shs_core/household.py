@@ -1703,14 +1703,14 @@ class Household:
         self, *, bindings: list[HeatingRoomBinding], device_statistics: dict[str, str],
         room_air_probes: dict[str, str], outdoor_entity: str | None,
         start: datetime, end: datetime,
-        read_energy, probe_topology=None,
+        read_energy, probe_topology=None, peak_statistics=None,
     ) -> HeatingHistoryCapture:
         """Native learning evidence, using the normal counter settlement owner."""
         return await capture_heating_history(
             history=self.ports.history, read_energy=read_energy,
             bindings=bindings, device_statistics=device_statistics,
             room_air_probes=room_air_probes, outdoor_entity=outdoor_entity,
-            start=start, end=end, probe_topology=probe_topology,
+            start=start, end=end, probe_topology=probe_topology, peak_statistics=peak_statistics,
         )
 
     async def _heating_history_upload(self, options, devices, end, cursor, *, include_history=True, lineage=None, stored=None):
@@ -1727,6 +1727,10 @@ class Household:
         sources = replace(sources, lineage_revision=heating_lineage_revision(sources, lineage))
         if stored is None:
             stored = await self._store.async_load() or {}
+        if stored.get("heating_power_peaks_supported") is not True:
+            # A server that cannot store peaks would accept the intervals and
+            # drop them, spending the one re-send of history that fills them.
+            sources = replace(sources, peak_device_keys=())
         ledger = stored["counter_peak_evidence"] = validate_counter_evidence(stored.get("counter_peak_evidence"))
         sources = await prepare_heating_counter_evidence(self.ports.history, sources, lineage, ledger, end)
         # Durable evidence must precede derived observations, including a
@@ -1800,10 +1804,13 @@ class Household:
                 bindings=bindings, device_statistics={key: resolved.device_statistics[key]
                     for binding in bindings for key in binding.device_keys if key in resolved.device_statistics},
                 room_air_probes=resolved.room_air_probes, outdoor_entity=resolved.outdoor_entity,
-                start=segment.start, end=segment.end, probe_topology=topology, read_energy=reader.changes)
+                start=segment.start, end=segment.end, probe_topology=topology, read_energy=reader.changes,
+                peak_statistics={key: entity for key, entity in resolved.peak_statistics.items()
+                                 if any(key in binding.device_keys for binding in bindings)})
             for row in captured.observations:
                 rows[(row["room_key"],row["source_key"],row["start"],row["duration_s"])] = row
-            if not topology_available or captured.diagnostics.get("probe_evidence_read_failures"):
+            if (not topology_available or captured.diagnostics.get("probe_evidence_read_failures")
+                    or captured.diagnostics.get("peak_read_failures")):
                 if window not in failed_windows:
                     failed_windows.append(window)
             for row in captured.probe_observations:
@@ -4577,6 +4584,8 @@ class Household:
                 if stalled_before:
                     stored["optimisation_catch_up_resent"] = stalled_before.isoformat()
                     stored["optimisation_catch_up_pending"] = True
+            if result.get("heating_power_peaks_supported") is True:
+                stored["heating_power_peaks_supported"] = True
             accepted_cursor = accepted_heating_cursor(result, heating_observations, pending_heating_history,
                 stored.get("heating_history_cursor"), probe_observations=heating_probe_observations)
             if accepted_cursor is not None:
