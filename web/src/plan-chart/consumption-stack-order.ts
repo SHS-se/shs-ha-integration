@@ -4,7 +4,17 @@ interface StackSeries {
   values: readonly (number | null)[];
 }
 
-/** Device bands from bottom to top. Base load is added separately by the chart. */
+/**
+ * Device bands from bottom to top. Base load is added separately by the chart.
+ *
+ * Continuous loads go to the bottom, and among similarly continuous loads the
+ * more powerful one goes lower. Continuity is how much the band's edge moves
+ * per unit of energy: a load that runs in one long block moves its edge twice,
+ * however long it then stays off, so idle time never lifts it. Dividing by the
+ * square root of the running power puts big loads lower without letting power
+ * outrank continuity. The rule has no tuning constant: scaling every load by
+ * the same factor leaves the order unchanged.
+ */
 export function orderConsumptionStack<T extends StackSeries>(
   series: readonly T[],
   samplesFor: (entry: T) => readonly (number | null | undefined)[] = entry => entry.values,
@@ -12,21 +22,17 @@ export function orderConsumptionStack<T extends StackSeries>(
   return series.map(entry => {
     const samples = samplesFor(entry);
     let total = 0;
-    let squares = 0;
+    let running = 0;
     let movement = 0;
     let previous = 0;
     for (const [index, sample] of samples.entries()) {
       const watts = typeof sample === 'number' && Number.isFinite(sample) ? sample : 0;
       total += watts;
-      squares += watts * watts;
+      if (watts > 0) running += 1;
       if (index > 0) movement += Math.abs(watts - previous);
       previous = watts;
     }
-    // Off quarters increase relative spread. Repeated changes also move a
-    // load up the stack, even when it runs more often than a single long run.
-    const score = total > 0
-      ? Math.sqrt(Math.max(0, samples.length * squares / total ** 2 - 1)) + movement / total
-      : Infinity;
+    const score = total > 0 ? movement / total / Math.sqrt(total / running) : Infinity;
     return { entry, score };
   }).sort((a, b) => {
     const difference = a.score - b.score;
