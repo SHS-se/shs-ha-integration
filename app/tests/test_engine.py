@@ -277,6 +277,61 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         source.publish.assert_awaited_once()
         self.assertFalse(self.native_calls)
 
+    async def test_room_probe_endpoint_commits_only_selected_source_and_reads_it_back(self):
+        from aiohttp.test_utils import TestClient, TestServer
+        from shs_app.server import create_app
+        from unittest.mock import AsyncMock
+
+        engine = self.engine()
+        await engine.load()
+        await engine.activate()
+        engine.gateway.connected['contract'] = {'companion_version': 'companion'}
+        dashboard = self.dashboard(engine)
+        room, air, water = 'synthetic_room', 'sensor.synthetic_air', 'sensor.synthetic_water'
+        self.context['area_names'][room] = 'Synthetic room'
+        self.context['entity_areas'][air] = room
+        self.context['entity_names'][air] = 'Synthetic air'
+        self.context['entity_ids'].append(air)
+        request = self.service.source.request
+
+        async def catalog(operation, body):
+            if operation == 'catalog':
+                return dict(context=self.context, states={air: {
+                    'entity_id': air, 'state': '21', 'last_updated': datetime.now(timezone.utc).isoformat(),
+                    'attributes': {'unit_of_measurement': '°C', 'device_class': 'temperature', 'state_class': 'measurement'},
+                }}, preferences={}, meter_areas={})
+            return await request(operation, body)
+
+        self.service.source.request = catalog
+        before = {**engine.configuration.options(), 'rooms': {room: {'temperature_entity_id': water}},
+                  'pool_water_temperature_entity': water}
+        await engine.configuration.commit(engine.configuration.revision, before, 'synthetic-source-setup')
+        await engine.editor.view()
+        before = deepcopy(engine.configuration.options())
+        revision = engine.configuration.revision
+        expected = {**before, 'rooms': {room: {'temperature_entity_id': air}}}
+        body = {'expected_revision': revision, 'request_id': 'synthetic-probe-save',
+                'room_key': room, 'temperature_entity_id': air}
+        with patch.object(engine, 'cloud_job', AsyncMock()):
+            async with TestClient(TestServer(create_app(dashboard, self.root, trusted_peer='127.0.0.1'))) as client:
+                response = await client.post('/api/configuration/save_room_probe', json=body)
+                saved = await response.json()
+                self.assertEqual(response.status, 200, saved)
+                self.assertEqual(saved['revision'], revision + 1)
+                response = await client.post('/api/configuration/get', json={})
+                readback = await response.json()
+                self.assertEqual(response.status, 200, readback)
+                self.assertEqual(readback['configuration']['rooms'][room], expected['rooms'][room])
+                self.assertEqual(readback['configuration']['pool_water_temperature_entity'], water)
+                self.assertEqual(engine.configuration.options(), expected)
+                response = await client.post('/api/configuration/save_room_probe', json=body)
+                self.assertEqual(response.status, 200, await response.json())
+                self.assertEqual(engine.configuration.revision, revision + 1, 'Lost-reply retry is idempotent')
+                response = await client.post('/api/configuration/save_room_probe', json={**body, 'request_id': 'stale-edit'})
+                self.assertEqual(response.status, 409, await response.json())
+                self.assertEqual(engine.configuration.options(), expected)
+        self.assertFalse(self.native_calls, 'Changing an observation never commands a heater')
+
     async def test_category_save_updates_inventory_and_fields_for_a_renamed_meter(self):
         from aiohttp.test_utils import TestClient, TestServer
         from shs_app.server import create_app

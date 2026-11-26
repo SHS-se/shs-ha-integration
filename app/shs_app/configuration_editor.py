@@ -196,7 +196,7 @@ class ConfigurationEditor:
                     or state.attributes.get('state_class') != 'measurement'):
                 raise ConfigurationFieldErrors({'temperature_entity_id': ['Choose a Celsius temperature sensor in this room with recorder statistics.']})
 
-        def set_probe(existing):
+        async def set_probe(existing):
             if any(mapping.get(c.ROOM_AREA_FIELD) == room for mapping in existing.get(c.OPT_DEVICE_CONTROL_MAPPINGS, {}).values()):
                 raise ConfigurationFieldErrors({'temperature_entity_id': ['Edit this room probe through its device settings.']})
             rooms = dict(existing.get('rooms', {}))
