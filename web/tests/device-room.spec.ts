@@ -475,18 +475,27 @@ test('shows saved connections from both rooms and corrects a rejected standalone
   const probe = 'sensor.synthetic_hall_temperature';
   let data: Record<string, unknown>;
   let writes = 0;
+  let holdNextRead = false;
+  let releaseRead: (() => void) | undefined;
   await page.route('**/api/configuration/get', async route => {
-    const base = await (await route.fetch()).json();
-    data = {
-      ...base,
-      rooms: {hall: 'Hall', office: 'Office'},
-      devices: [],
-      entities: [{entity_id: probe, name: 'Hall probe', domain: 'sensor', area_id: 'hall',
-        device_class: 'temperature', state_class: 'measurement', unit: '°C'}],
-      configuration: {...base.configuration,
-        room_connections: {revision: 1, connections: [{rooms: ['hall', 'office']}] }},
-    };
-    await route.fulfill({json: data});
+    if (!data) {
+      const base = await (await route.fetch()).json();
+      data = {
+        ...base,
+        rooms: {hall: 'Hall', office: 'Office'},
+        devices: [],
+        entities: [{entity_id: probe, name: 'Hall probe', domain: 'sensor', area_id: 'hall',
+          device_class: 'temperature', state_class: 'measurement', unit: '°C'}],
+        configuration: {...base.configuration,
+          room_connections: {revision: 1, connections: [{rooms: ['hall', 'office']}] }},
+      };
+    }
+    const response = data;
+    if (holdNextRead) {
+      holdNextRead = false;
+      await new Promise<void>(resolve => { releaseRead = resolve; });
+    }
+    await route.fulfill({json: response});
   });
   await page.route('**/api/configuration/save_room_probe', async route => {
     expect(route.request().postDataJSON()).toMatchObject({room_key: 'hall', temperature_entity_id: probe});
@@ -495,8 +504,9 @@ test('shows saved connections from both rooms and corrects a rejected standalone
         field_errors: {temperature_entity_id: ['Check the probe configuration.']}}});
       return;
     }
-    await route.fulfill({json: {...data, revision: 2,
-      configuration: {...data.configuration as object, rooms: {hall: {temperature_entity_id: probe}}}}});
+    data = {...data, revision: 2,
+      configuration: {...data.configuration as object, rooms: {hall: {temperature_entity_id: probe}}}};
+    await route.fulfill({json: data});
   });
   await page.goto('./#settings');
   const editor = page.locator('shs-configuration-editor');
@@ -515,8 +525,27 @@ test('shows saved connections from both rooms and corrects a rejected standalone
   await expect(editor.getByText('Check the probe configuration.')).toBeVisible();
   await expect(picker).toBeFocused();
   await expect(picker).toHaveAttribute('aria-invalid', 'true');
+  // A refresh started before the save may finish afterward with the old revision.
+  holdNextRead = true;
+  await editor.evaluate(element => {
+    void (element as HTMLElement & {_poll(): Promise<void>})._poll();
+  });
+  await expect.poll(() => Boolean(releaseRead)).toBe(true);
   await save.click();
+  // A disabled button also occurs while saving; wait for the completed response.
+  await expect.poll(() => editor.evaluate(element =>
+    (element as HTMLElement & {_saving: boolean})._saving)).toBe(false);
   await expect(picker).toHaveValue(probe);
   await expect(save).toBeDisabled();
   await expect(editor.getByText('Check the probe configuration.')).toHaveCount(0);
+  releaseRead!();
+  await expect.poll(() => editor.evaluate(element =>
+    (element as HTMLElement & {_polling: boolean})._polling)).toBe(false);
+  await expect(picker).toHaveValue(probe);
+  await expect(save).toBeDisabled();
+  await page.reload();
+  await editor.getByRole('button', {name: 'Rooms', exact: true}).click();
+  await expect(picker).toHaveValue(probe);
+  await expect(save).toBeDisabled();
+  expect(writes).toBe(2);
 });

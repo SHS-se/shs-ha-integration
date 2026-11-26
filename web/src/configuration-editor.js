@@ -1748,12 +1748,14 @@ class ShsEnergyConfigPanel extends HTMLElement {
     const draft = this._standaloneProbeDraft;
     if (this._saving || draft?.room !== room) return;
     this._saving = true;
+    this._pollRevision = (this._pollRevision || 0) + 1;
     this._standaloneProbeError = null;
     this._render();
     try {
       const data = await this._request({action: "save_room_probe", config_entry: this._entryId,
         expected_revision: draft.revision, room_key: room, temperature_entity_id: draft.source});
       this._standaloneProbeDraft = null;
+      this._mergePanel(data);
       this._acceptRefresh(data);
     } catch (error) {
       this._standaloneProbeError = {room, message: error.field_errors?.temperature_entity_id?.[0] || this._errorMessage(error)};
