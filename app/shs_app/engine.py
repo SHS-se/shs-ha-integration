@@ -48,6 +48,7 @@ from shs_core.optimisation import validate_plan_contract
 from .indexed_storage import IndexedStorage
 from .configuration_editor import ConfigurationEditor
 from .room_connections import RoomConnections
+from .heating_history_drain import HeatingHistoryDrain
 from .entities import project_entities
 from shs_core.native_configuration import native_options
 from shs_core.source_admission import source_bindings, pool_paused
@@ -65,7 +66,8 @@ def critical_runtime_error(error):
 
 LOGGER = logging.getLogger(__name__)
 PERIODIC_PROFILES = {'battery_inputs':'battery_inputs',
-                     'async_request_refresh':'cloud_refresh','async_replan_poll':'plan_exchange'}
+                     'async_request_refresh':'cloud_refresh','async_replan_poll':'plan_exchange',
+                     'plan_exchange':'plan_exchange'}
 
 
 def encode(value):
@@ -131,6 +133,7 @@ class AppEngine:
         self.record_stores = []
         self.backends = None
         self.households = {}
+        self.history_drains = {}
         self.restart_requested = asyncio.Event()
 
     def spawn(self, work, name='shs_app_work'):
@@ -246,6 +249,10 @@ class AppEngine:
                 connection_store=record(f'cloud.{environment}.connections.'),
                 control_authority=authority)
             self.households[environment] = household
+            self.history_drains[environment] = HeatingHistoryDrain(household,
+                lambda:self.configuration.revision,
+                lambda error, environment=environment:self.operation_error(
+                    "heating_history:"+environment,error,stage="heating_inputs"), critical_runtime_error)
             await household.async_restore_plan()
             household.connection_health.verified("projection")
         h = self.household = self.households[self.environment]
@@ -477,6 +484,8 @@ class AppEngine:
         return {**native_options(resolved),'_observed_entities':sorted(configured_entity_ids(resolved))}
 
     def configuration_applied(self):
+        for drain in self.history_drains.values():
+            drain.wake.set()
         if self.started:
             self.scheduler.request('configuration_applied')
 
@@ -605,7 +614,8 @@ class AppEngine:
             await self.request_plan(household)
             if household._plan_configuration_changed:
                 await asyncio.sleep(5)
-        await self.periodic(household.async_replan_poll,PLAN_EXCHANGE_INTERVAL_MINUTES*60,
+        drain = next(value for value in self.history_drains.values() if value.household is household)
+        await self.periodic(drain.plan_exchange,PLAN_EXCHANGE_INTERVAL_MINUTES*60,
             offset=random.uniform(*PLAN_EXCHANGE_OFFSET_SECONDS))
 
     async def complete_backend_selection(self, household):
@@ -810,6 +820,7 @@ class AppEngine:
                         household._pipeline_error('room_connections', None)
                     await self.cloud_job(environment, publish, stage='room_connections')
                 operations = [('planning','upload',lambda h=h:self.planning(h)),
+                    ('heating_history','heating_inputs',self.history_drains[environment].run),
                     ('room_connections','room_connections',lambda sync=sync_rooms:self.periodic(sync,15)),
                     ('cloud_refresh','cloud_status',lambda h=h:self.periodic(h.async_request_refresh,60)),
                     ('room_observations','room_observations',lambda h=h:self.periodic(h.async_room_observations,60)),

@@ -5,7 +5,7 @@ on:
     branches:
       - main
     # Documentation cannot change what gets installed, so it does not earn a
-    # build. Any push that also touches code still publishes one.
+    # build. Tests run independently of whether installed core bytes changed.
     paths:
       - "custom_components/**"
       - "tests/**"
@@ -49,6 +49,29 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Determine integration release ownership
+        id: release_scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            publish=true
+          else
+            before="$BEFORE_SHA"
+            if [[ "$before" =~ ^0+$ ]]; then
+              before="$(git hash-object -t tree /dev/null)"
+            fi
+            if git diff --quiet "$before" "$GITHUB_SHA" -- custom_components/; then
+              publish=false
+            else
+              status=$?
+              if [[ "$status" != 1 ]]; then exit "$status"; fi
+              publish=true
+            fi
+          fi
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -67,6 +90,7 @@ jobs:
           node --test tests/frontend-config-save.test.js
 
       - name: Read and validate the beta version
+        if: steps.release_scope.outputs.publish == 'true'
         id: version
         env:
           GH_TOKEN: ${{ github.token }}
@@ -92,6 +116,7 @@ jobs:
           echo "Publishing pre-release $version." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish the pre-release
+        if: steps.release_scope.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}

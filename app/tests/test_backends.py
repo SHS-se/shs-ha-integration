@@ -125,6 +125,7 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         engine.backends=self.backends
         engine.environment='production'
         engine.household=h
+        engine.history_drains={"production":SimpleNamespace(household=h,plan_exchange=AsyncMock())}
         return engine,h
 
     async def test_selection_explicitly_requests_executable_plan_before_settling(self):
