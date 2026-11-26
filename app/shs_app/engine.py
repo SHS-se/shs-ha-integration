@@ -47,6 +47,7 @@ from shs_core.api_contract import validate_server_contract
 from shs_core.optimisation import validate_plan_contract
 from .indexed_storage import IndexedStorage
 from .configuration_editor import ConfigurationEditor
+from .room_connections import RoomConnections
 from .entities import project_entities
 from shs_core.native_configuration import native_options
 from shs_core.source_admission import source_bindings, pool_paused
@@ -213,6 +214,7 @@ class AppEngine:
 
         self.configuration = Configuration(self.root,self.identity,install_configuration,project=self.native_configuration,
                                            on_applied=self.configuration_applied)
+        self.room_connections = RoomConnections(self)
         await self.configuration.load(dict(snapshot['configuration']['configuration_authority'],
             options=snapshot['configuration']['options']),lambda:history.source('credentials',{}))
         self.backends = Backends(self.root, self.identity)
@@ -802,7 +804,13 @@ class AppEngine:
             self.spawn(self.cloud_job(self.environment, self.editor.import_device_setups, stage='website_choices'),
                        'device_settings_import')
             for environment, h in self.households.items():
+                async def sync_rooms(environment=environment, household=h):
+                    async def publish():
+                        await self.room_connections.sync(environment)
+                        household._pipeline_error('room_connections', None)
+                    await self.cloud_job(environment, publish, stage='room_connections')
                 operations = [('planning','upload',lambda h=h:self.planning(h)),
+                    ('room_connections','room_connections',lambda sync=sync_rooms:self.periodic(sync,15)),
                     ('cloud_refresh','cloud_status',lambda h=h:self.periodic(h.async_request_refresh,60)),
                     ('room_observations','room_observations',lambda h=h:self.periodic(h.async_room_observations,60)),
                     ('input_accuracy','cloud_status',lambda h=h:self.periodic(h.async_report_input_accuracy,60)),

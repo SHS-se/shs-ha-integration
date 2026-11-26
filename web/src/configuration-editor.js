@@ -63,7 +63,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
     this._savingDeviceKey = "";
     this._deviceErrors = {};
     this._roomDrafts = new Map();
-    this._doorways = [];
+    this._doorwayDraft = null;
     this._error = "";
     this._notice = "";
     this._entryId = new URLSearchParams(window.location.search).get("config_entry");
@@ -189,6 +189,7 @@ class ShsEnergyConfigPanel extends HTMLElement {
 
   get _dirty() {
     return JSON.stringify(this._draft) !== JSON.stringify(this._savedDraft)
+      || Boolean(this._doorwayDraft)
       || this._roomDrafts?.size > 0
       || [...(this._deviceDrafts?.keys() || [])].some(key => this._deviceDirty(key));
   }
@@ -568,6 +569,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
   _discard() {
     this._draft = this._clone(this._savedDraft);
     this._roomDrafts?.clear();
+    this._doorwayDraft = this._doorwayForm = this._doorwaySaveRequest = null;
+    this._doorwayError = "";
     this._error = "";
     this._discovery = null;
     this._notice = "Changes discarded.";
@@ -889,20 +892,38 @@ class ShsEnergyConfigPanel extends HTMLElement {
       this._render();
       this.shadowRoot.querySelector('[data-doorway-field="connectedRoom"]')?.focus();
     }
+    else if (action === "edit-doorway") {
+      const index = Number(button.dataset.index);
+      const room = button.dataset.roomKey;
+      this._doorwayForm = {room, index, connectedRoom: this._roomConnections()[index].rooms.find(key => key !== room)};
+      this._render();
+      this.shadowRoot.querySelector('[data-doorway-field="connectedRoom"]')?.focus();
+    }
     else if (action === "add-doorway" || action === "cancel-doorway") {
       if (action === "add-doorway") {
         const {room, connectedRoom} = this._doorwayForm;
         if (!this._availableDoorwayRooms(room).includes(connectedRoom)) return;
-        this._doorways.push({rooms: [room, connectedRoom]});
+        const edges = this._clone(this._roomConnections());
+        const edge = {rooms: [room, connectedRoom]};
+        if (this._doorwayForm.index == null) edges.push(edge);
+        else edges[this._doorwayForm.index] = edge;
+        this._editRoomConnections(edges);
       }
       this._doorwayForm = null;
       this._render();
       this.shadowRoot.querySelector('[data-action="open-doorway-form"]:enabled, [data-action="remove-doorway"]')?.focus();
     }
     else if (action === "remove-doorway") {
-      this._doorways.splice(Number(button.dataset.index), 1);
+      this._editRoomConnections(this._roomConnections().filter((_, index) => index !== Number(button.dataset.index)));
+      this._doorwayForm = null;
       this._render();
       this.shadowRoot.querySelector('[data-action="open-doorway-form"]')?.focus();
+    }
+    else if (action === "save-room-connections") void this._saveRoomConnections();
+    else if (action === "discard-room-connections") {
+      this._doorwayDraft = this._doorwayForm = this._doorwaySaveRequest = null;
+      this._doorwayError = "";
+      void this._load(false);
     }
     else if (action === "add-field") { this._added.add(button.dataset.token); this._render(); }
     else if (action === "remove-field") this._removeField(button.dataset.scope, button.dataset.fieldKey, button.dataset.deviceKey);
@@ -1697,12 +1718,11 @@ class ShsEnergyConfigPanel extends HTMLElement {
         ${room ? `<div class="workspace-panel"><h3>Temperature probe</h3>
           ${target ? `<p>${this._escape(probe || "No room temperature probe shown")}</p>
             <button type="button" class="text" data-action="edit-field" data-field-token="${this._escape(target.token)}">Edit room temperature probe</button>`
-            : this._data.room_connections ? this._renderStandaloneRoomProbe(room, probe)
-            : `<p>${this._escape(probe || "No room temperature probe shown")}</p>`}</div>
+            : this._renderStandaloneRoomProbe(room, probe)}</div>
           ${this._renderRoomConnections(room, rooms)}
           <div class="workspace-panel"><h3>Devices</h3>
           ${devices.length ? devices.map(device => `<button type="button" class="text" data-action="edit-device" data-device-key="${this._escape(device.key)}">${this._escape(device.name)}</button>`).join("") : "<p>No SHS devices in this room.</p>"}</div>`
-          : "<p>No Home Assistant rooms found.</p>"}
+          : `<p>No Home Assistant rooms found.</p>${this._renderRoomConnections("", rooms)}`}
       </section></div>`;
   }
 
@@ -1745,47 +1765,76 @@ class ShsEnergyConfigPanel extends HTMLElement {
   }
 
   _availableDoorwayRooms(room) {
-    const connected = new Set((this._doorways || []).filter(connection => connection.rooms.includes(room)).flatMap(connection => connection.rooms));
+    const connected = new Set(this._roomConnections().filter((connection, index) =>
+      index !== this._doorwayForm?.index && connection.rooms.includes(room)).flatMap(connection => connection.rooms));
     return Object.keys(this._data.rooms || {}).filter(key => key !== room && !connected.has(key));
+  }
+
+  _roomConnections() {
+    return this._doorwayDraft?.connections ?? this._data.configuration.room_connections?.connections ?? [];
+  }
+
+  _editRoomConnections(edges) {
+    this._doorwayDraft = {revision: this._doorwayDraft?.revision ?? this._data.revision, connections: edges};
+    this._doorwaySaveRequest = null;
+    this._doorwayError = "";
+  }
+
+  async _saveRoomConnections() {
+    if (this._saving || !this._doorwayDraft) return;
+    this._doorwaySaveRequest ||= {action: "save_room_connections", config_entry: this._entryId,
+      expected_revision: this._doorwayDraft.revision, request_id: newRequestId(),
+      connections: this._clone(this._doorwayDraft.connections)};
+    this._saving = true;
+    this._doorwayError = "";
+    this._pollRevision = (this._pollRevision || 0) + 1;
+    this._render();
+    try {
+      const data = await this._request(this._doorwaySaveRequest);
+      this._mergePanel(data);
+      this._doorwayDraft = this._doorwayForm = this._doorwaySaveRequest = null;
+    } catch (error) {
+      this._doorwayError = error.field_errors?.connections?.join(" ") || this._errorMessage(error);
+    } finally {
+      this._saving = false;
+      this._render();
+      this.shadowRoot.querySelector("[data-connections-editor]")?.focus();
+    }
   }
 
   _renderRoomConnections(room, rooms) {
     const names = this._data.rooms;
-    const saved = this._data.room_connections;
-    if (saved) {
-      const profile = new URL(saved.url);
-      profile.searchParams.set("room", room);
-      const connections = (saved.connections ?? []).filter(edge => edge.rooms.includes(room));
-      const website = saved.environment === "test" ? "test website" : "website";
+    if (!this._data.configuration.room_connections) {
       return `<div class="workspace-panel room-connections"><h3>Room connections</h3>
-        ${connections.length ? `<ul class="doorway-list">${connections.map(({rooms: pair}) => {
-          const other = pair.find(key => key !== room);
-          return `<li><div><strong>${this._escape(names[other] ?? other)}</strong></div></li>`;
-        }).join("")}</ul>` : `<p class="muted">${saved.connections ? "No saved doorways." : "Waiting for saved doorways."}</p>`}
-        <a href="${this._escape(profile.href)}" target="_blank" rel="noopener noreferrer">Edit room connections on ${website}</a></div>`;
+        <p role="status">Recovering your saved room connections. SHS retries automatically.</p></div>`;
     }
     const available = this._availableDoorwayRooms(room);
     const form = this._doorwayForm?.room === room ? this._doorwayForm : null;
-    const connections = (this._doorways || []).map(({rooms: pair}, index) => {
-      if (!pair.includes(room)) return "";
+    const connections = this._roomConnections().map(({rooms: pair}, index) => {
+      const orphaned = pair.every(key => !names[key]);
+      if (!pair.includes(room) && !orphaned) return "";
       const other = pair.find(key => key !== room);
-      if (!names[other]) return "";
-      return `<li><div><strong>${this._escape(names[other])}</strong></div>
-        <button type="button" class="text" data-action="remove-doorway" data-index="${index}" aria-label="Remove doorway to ${this._escape(names[other])}">Remove</button></li>`;
+      const label = orphaned ? pair.join(" ↔ ") : names[other] ?? other;
+      return `<li><div><strong>${this._escape(label)}</strong>${names[other] ? "" : '<span class="muted">Room no longer in Home Assistant</span>'}</div>
+        <div class="doorway-actions">${orphaned ? "" : `<button type="button" class="text" data-action="edit-doorway" data-room-key="${this._escape(room)}" data-index="${index}" aria-label="Edit doorway to ${this._escape(label)}" ${this._saving ? "disabled" : ""}>Edit</button>`}
+        <button type="button" class="text" data-action="remove-doorway" data-index="${index}" aria-label="Remove doorway to ${this._escape(label)}" ${this._saving ? "disabled" : ""}>Remove</button></div></li>`;
     }).filter(Boolean);
-    return `<details class="workspace-panel room-connections" data-open-key="room-connections" ${this._expanded.has("room-connections") ? "open" : ""}>
+    return `<details class="workspace-panel room-connections" data-connections-editor tabindex="-1" ${this._doorwayError ? 'aria-invalid="true" aria-describedby="room-connections-error"' : ""} data-open-key="room-connections" ${this._expanded.has("room-connections") ? "open" : ""}>
       <summary>Room connections</summary>
       <div class="section-head doorway-heading"><div><h3>Doorways</h3><p class="muted">Add doorways that let heat move between rooms.</p></div>
-        ${form ? "" : `<button type="button" class="secondary" data-action="open-doorway-form" data-room-key="${this._escape(room)}" ${available.length ? "" : "disabled"}>Add doorway</button>`}</div>
+        ${form ? "" : `<button type="button" class="secondary" data-action="open-doorway-form" data-room-key="${this._escape(room)}" ${available.length && !this._saving ? "" : "disabled"}>Add doorway</button>`}</div>
       ${connections.length ? `<ul class="doorway-list">${connections.join("")}</ul>` : '<p class="muted">No doorways added.</p>'}
       ${form ? `<div class="doorway-form"><div class="field-grid">
-        <label class="field">Connected room<select data-doorway-field="connectedRoom" data-field-key="doorway-room">
+        <label class="field">Connected room<select data-doorway-field="connectedRoom" data-field-key="doorway-room" ${this._saving ? "disabled" : ""}>
           <option value="">Choose a room</option>${rooms.filter(([key]) => available.includes(key)).map(([key, name]) =>
             `<option value="${this._escape(key)}" ${key === form.connectedRoom ? "selected" : ""}>${this._escape(name)}</option>`).join("")}
         </select></label></div>
-        <div class="doorway-actions"><button type="button" class="primary" data-action="add-doorway" ${available.includes(form.connectedRoom) ? "" : "disabled"}>Add connection</button>
+        <div class="doorway-actions"><button type="button" class="primary" data-action="add-doorway" ${available.includes(form.connectedRoom) && !this._saving ? "" : "disabled"}>${form.index == null ? "Add connection" : "Update connection"}</button>
         <button type="button" class="secondary" data-action="cancel-doorway">Cancel</button></div></div>` : ""}
-      <p class="muted">Preview only. Connections reset when you reload the app.</p>
+      ${this._doorwayError ? `<p id="room-connections-error" role="alert">${this._escape(this._doorwayError)}</p>` : ""}
+      <div class="doorway-actions"><span role="status">${this._doorwayDraft ? "Unsaved changes" : "Saved in the SHS app"}</span>
+        <button type="button" class="primary" data-action="save-room-connections" ${this._doorwayDraft && !this._saving ? "" : "disabled"}>${this._saving ? "Saving…" : "Save connections"}</button>
+        <button type="button" class="secondary" data-action="discard-room-connections" ${this._doorwayDraft && !this._saving ? "" : "disabled"}>${this._doorwayError ? "Reload saved connections" : "Discard"}</button></div>
     </details>`;
   }
 
@@ -2181,6 +2230,8 @@ class ShsEnergyConfigPanel extends HTMLElement {
       button:disabled { cursor:default; opacity:.48; }
       .shell { min-height:0; margin-bottom:24px; border:1px solid var(--divider-color); border-radius:14px; overflow:clip; }
       button:focus-visible, summary:focus-visible, a:focus-visible { outline:3px solid var(--primary-color); outline-offset:3px; }
+      [data-connections-editor]:focus { outline:3px solid var(--primary-color); outline-offset:3px; }
+      [data-connections-editor][aria-invalid="true"] { border-color:var(--error-color); }
       .switch input:focus-visible + span { outline:3px solid var(--primary-color); outline-offset:3px; }
       .switch input:disabled + span { opacity:.45; }
       .schedule-device { padding:16px 20px; margin-bottom:12px; }

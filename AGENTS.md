@@ -49,7 +49,9 @@ integration"; the repository name predates the conversion. Do not give click pat
 from section ids, `"tab"` values or card titles in `configuration_fields.py`, which
 are not navigation. Check `TABS` in `web/src/configuration-editor.js` or the running
 app, or say the path is unverified. What the planner needs to know about the home
-is asked in the website home profile, not added as an app setting.
+is asked in the website home profile, not added as an app setting. Room connections
+are owned and edited in the SHS app. The website receives a replica for room
+learning and forecasts; it must not become a competing editor.
 
 # Runtime checkpoint
 

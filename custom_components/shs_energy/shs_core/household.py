@@ -310,7 +310,6 @@ class Household:
         self.last_actual_slots_accepted = 0
         self.actuals_accepted_until: str | None = None
         self.last_thermal_slots_accepted = 0
-        self.room_connections: list[dict[str, Any]] | None = None
         self._room_observation_basis = None
         self.pending_room_history: dict[str, str] | None = None
         self.optimisation_missing_inputs: list[str] = []
@@ -1695,7 +1694,6 @@ class Household:
         except (HouseholdReadError, ShsApiError, ValueError) as error:
             self._pipeline_error("room_observations", error)
             return
-        self.room_connections = reply["connections"]
         self._room_observation_basis = basis
         self._pipeline_error("room_observations", None)
 

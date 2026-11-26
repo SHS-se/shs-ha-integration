@@ -187,6 +187,31 @@ class EngineTests(unittest.IsolatedAsyncioTestCase):
         engine.publish_ui=dashboard.publish_runtime
         return dashboard
 
+    async def test_room_connections_action_uses_local_authority_without_changing_permissions(self):
+        from unittest.mock import AsyncMock
+        engine = self.engine()
+        await engine.load()
+        await engine.activate()
+        engine.editor.context = {'area_names': {'hall': 'Hall', 'office': 'Office'}}
+        client = engine.household.client
+        with (patch.object(client, 'read_room_connections', AsyncMock(return_value={'connections': []})),
+              patch.object(client, 'publish_room_connections', AsyncMock(side_effect=lambda document: document))):
+            await engine.room_connections.sync(engine.environment)
+        before = deepcopy(engine.configuration.options())
+        native = deepcopy(self.configuration.options())
+        with (patch.object(engine.editor, 'refresh_catalog', AsyncMock()),
+              patch.object(engine.editor, 'view', AsyncMock(return_value={'saved': True}))):
+            result = await engine.editor.action('save_room_connections', {
+                'expected_revision': engine.configuration.revision, 'request_id': 'save-map',
+                'connections': [{'rooms': ['office', 'hall']}]})
+        self.assertEqual(result, {'saved': True})
+        after = engine.configuration.options()
+        self.assertEqual(after['room_connections']['connections'], [{'rooms': ['hall', 'office']}])
+        self.assertEqual({k: v for k, v in after.items() if k != 'room_connections'},
+                         {k: v for k, v in before.items() if k != 'room_connections'})
+        self.assertEqual(self.configuration.options(), native)
+        self.assertEqual(self.native_calls, [])
+
     async def test_ha_projection_failure_is_visible_without_a_successful_ha_publication(self):
         from unittest.mock import AsyncMock
         engine=self.engine()

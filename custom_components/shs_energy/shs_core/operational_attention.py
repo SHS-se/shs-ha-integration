@@ -3,6 +3,7 @@ from copy import deepcopy
 
 
 STAGES = {
+    'room_connections': ('Room connections could not be synchronized', 'Open Settings → Rooms to review the app’s saved connections. SHS retries synchronization automatically.'),
     'website_choices': ('Website choices could not be refreshed', 'SHS retries the connection automatically. The last received choices remain in use.'),
     'cloud_status': ('Server connection failed', 'Check the server connection. SHS retries automatically.'),
     'tariff': ('Tariff data could not be received', 'Check the server connection and account settings.'),

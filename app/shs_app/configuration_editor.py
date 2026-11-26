@@ -159,6 +159,10 @@ class ConfigurationEditor:
             return await self._set_execution_mode(body)
         if operation == 'save_room_probe':
             return await self._save_room_probe(body)
+        if operation == 'save_room_connections':
+            await self.refresh_catalog()
+            await self.engine.room_connections.save(body, self.context['area_names'])
+            return await self.view()
         if operation == 'save_device':
             return await self._save_device(body)
         await self.refresh_catalog()

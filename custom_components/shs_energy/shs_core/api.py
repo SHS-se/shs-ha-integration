@@ -266,6 +266,12 @@ class ShsApiClient:
     async def upload_room_observations(self, rooms: dict, slots: list) -> dict[str, Any]:
         return await self._request("POST", "energy-room-observations", {"rooms": rooms, "slots": slots})
 
+    async def read_room_connections(self) -> dict[str, Any]:
+        return await self._request("GET", "energy-room-connections")
+
+    async def publish_room_connections(self, document: dict) -> dict[str, Any]:
+        return await self._request("POST", "energy-room-connections", document)
+
     async def read_device_setups(self) -> list[dict]:
         """Read saved choices, including retired rows, for the paired home."""
         result = await self._request("GET", "energy-optimisation-ingest")

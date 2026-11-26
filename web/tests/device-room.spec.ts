@@ -167,28 +167,134 @@ test('saves room and controls together and retries only the unsaved room', async
   await expect(editor.getByRole('heading', {name: 'Laundry'})).toBeVisible();
 });
 
-test('previews doorway connections from both rooms and removes them', async ({page}) => {
+test('saves, edits and deletes doorway connections in the app across reloads', async ({page}, testInfo) => {
+  let revision = 1;
+  let edges: {rooms: string[]}[] = [];
+  let snapshot: Record<string, any>;
+  const payload = () => ({...snapshot, revision, rooms: {hall: 'Hall', studio: 'Studio', office: 'Office'},
+    configuration: {...snapshot.configuration, room_connections: {revision, connections: edges}}});
   await page.route('**/api/configuration/get', async route => {
-    const data = await (await route.fetch()).json();
-    await route.fulfill({json: {...data, rooms: {hall: 'Hall', studio: 'Studio'}}});
+    snapshot ??= await (await route.fetch()).json();
+    await route.fulfill({json: payload()});
+  });
+  await page.route('**/api/configuration/save_room_connections', async route => {
+    const body = route.request().postDataJSON();
+    expect(body.expected_revision).toBe(revision);
+    edges = body.connections;
+    revision++;
+    await route.fulfill({json: payload()});
+  });
+  const editor = page.locator('shs-configuration-editor');
+  const connections = editor.locator('details.room-connections');
+  const open = async () => {
+    await page.goto('./#settings');
+    await editor.getByRole('button', {name: 'Rooms', exact: true}).click();
+  };
+  await open();
+  await expect(connections.getByText('No doorways added.')).toBeVisible();
+  await expect(connections.getByRole('link')).toHaveCount(0);
+  await connections.getByRole('button', {name: 'Add doorway'}).click();
+  const room = connections.getByRole('combobox', {name: 'Connected room'});
+  await expect(room.getByRole('option', {name: 'Hall', exact: true})).toHaveCount(0);
+  await room.selectOption('studio');
+  await connections.getByRole('button', {name: 'Add connection'}).click();
+  await expect(connections.getByRole('listitem')).toHaveText(/Studio.*Edit.*Remove/s);
+  expect(edges).toEqual([]);
+  await connections.getByRole('button', {name: 'Save connections'}).click();
+  await expect(connections.getByText('Saved in the SHS app')).toBeVisible();
+  await connections.screenshot({path: `/tmp/shs-room-ownership/room-connections-${testInfo.project.name}.png`});
+  await page.reload();
+  await open();
+  await expect(connections.getByRole('listitem')).toContainText('Studio');
+  await connections.getByRole('button', {name: 'Edit doorway to Studio'}).click();
+  await room.selectOption('office');
+  await connections.getByRole('button', {name: 'Update connection'}).click();
+  await connections.getByRole('button', {name: 'Save connections'}).click();
+  await expect(connections.getByText('Saved in the SHS app')).toBeVisible();
+  await editor.getByRole('navigation', {name: 'Room list'}).getByRole('button', {name: 'Office'}).click();
+  await expect(connections.getByRole('listitem')).toContainText('Hall');
+  await connections.getByRole('button', {name: 'Remove doorway to Hall'}).click();
+  await connections.getByRole('button', {name: 'Save connections'}).click();
+  await expect(connections.getByText('Saved in the SHS app')).toBeVisible();
+  await page.reload();
+  await open();
+  await expect(connections.getByText('No doorways added.')).toBeVisible();
+  expect(edges).toEqual([]);
+});
+
+test('retains rejected connection edits, focuses the editor and reloads a conflicting map', async ({page}) => {
+  let attempts = 0;
+  let snapshot: Record<string, any>;
+  let edges: {rooms: string[]}[] = [];
+  const payload = () => ({...snapshot, revision: attempts > 1 ? 2 : 1, rooms: {hall: 'Hall', office: 'Office'},
+    configuration: {...snapshot.configuration, room_connections: {revision: 1, connections: edges}}});
+  await page.route('**/api/configuration/get', async route => {
+    snapshot ??= await (await route.fetch()).json();
+    await route.fulfill({json: payload()});
+  });
+  await page.route('**/api/configuration/save_room_connections', async route => {
+    if (++attempts === 1) {
+      await route.fulfill({status: 409, json: {message: 'Connections changed in another window.',
+        field_errors: {connections: ['Reload the saved connections and review your changes.']}}});
+      return;
+    }
+    edges = route.request().postDataJSON().connections;
+    await route.fulfill({json: payload()});
   });
   await page.goto('./#settings');
   const editor = page.locator('shs-configuration-editor');
   await editor.getByRole('button', {name: 'Rooms', exact: true}).click();
   const connections = editor.locator('details.room-connections');
+  const add = async () => {
+    await connections.getByRole('button', {name: 'Add doorway'}).click();
+    await connections.getByRole('combobox', {name: 'Connected room'}).selectOption('office');
+    await connections.getByRole('button', {name: 'Add connection'}).click();
+    await connections.getByRole('button', {name: 'Save connections'}).click();
+  };
+  await add();
+  await expect(connections.getByRole('alert')).toHaveText('Reload the saved connections and review your changes.');
+  await expect(connections).toHaveAttribute('aria-invalid', 'true');
+  await expect(connections).toBeFocused();
+  await expect(connections.getByRole('listitem')).toContainText('Office');
+  await connections.getByRole('button', {name: 'Reload saved connections'}).click();
+  await expect(connections.getByRole('alert')).toHaveCount(0);
   await expect(connections.getByText('No doorways added.')).toBeVisible();
-  await connections.getByRole('button', {name: 'Add doorway'}).click();
-  const room = connections.getByRole('combobox', {name: 'Connected room'});
-  await expect(room.getByRole('option', {name: 'Hall', exact: true})).toHaveCount(0);
-  await expect(connections.getByRole('combobox')).toHaveCount(1);
-  await room.selectOption('studio');
-  await connections.getByRole('button', {name: 'Add connection'}).click();
-  await expect(connections.getByRole('listitem')).toHaveText(/Studio.*Remove/s);
-  await expect(connections.getByRole('button', {name: 'Add doorway'})).toBeDisabled();
-  await editor.getByRole('navigation', {name: 'Room list'}).getByRole('button', {name: 'Studio'}).click();
-  await expect(connections.getByRole('listitem')).toHaveText(/Hall.*Remove/s);
-  await connections.getByRole('button', {name: 'Remove doorway to Hall'}).click();
-  await expect(connections.getByText('No doorways added.')).toBeVisible();
+  await add();
+  await expect(connections.getByText('Saved in the SHS app')).toBeVisible();
+  await expect(connections).not.toHaveAttribute('aria-invalid', 'true');
+  expect(attempts).toBe(2);
+});
+
+test('preserves missing-room doorways until explicitly removed in the app', async ({page}) => {
+  let edges = [{rooms: ['hall', 'removed_room']}, {rooms: ['removed_a', 'removed_b']}];
+  let snapshot: Record<string, any>;
+  let rooms: Record<string, string> = {hall: 'Hall'};
+  const payload = () => ({...snapshot, rooms,
+    configuration: {...snapshot.configuration, room_connections: {revision: 1, connections: edges}}});
+  await page.route('**/api/configuration/get', async route => {
+    snapshot ??= await (await route.fetch()).json();
+    await route.fulfill({json: payload()});
+  });
+  await page.route('**/api/configuration/save_room_connections', async route => {
+    edges = route.request().postDataJSON().connections;
+    await route.fulfill({json: payload()});
+  });
+  await page.goto('./#settings');
+  const editor = page.locator('shs-configuration-editor');
+  await editor.getByRole('button', {name: 'Rooms', exact: true}).click();
+  const connections = editor.locator('details.room-connections');
+  await expect(connections.getByRole('listitem')).toHaveCount(2);
+  rooms = {};
+  await page.reload();
+  await editor.getByRole('button', {name: 'Rooms', exact: true}).click();
+  await expect(editor.getByText('No Home Assistant rooms found.')).toBeVisible();
+  await expect(connections.getByRole('listitem')).toHaveCount(2);
+  await connections.getByRole('button', {name: 'Remove doorway to hall ↔ removed_room', exact: true}).click();
+  expect(edges).toHaveLength(2);
+  await connections.getByRole('button', {name: 'Remove doorway to removed_a ↔ removed_b', exact: true}).click();
+  await connections.getByRole('button', {name: 'Save connections'}).click();
+  await expect(connections.getByText('Saved in the SHS app')).toBeVisible();
+  expect(edges).toEqual([]);
 });
 
 test('the device header switch shows the persisted inclusion state', async ({page}) => {
@@ -366,20 +472,19 @@ test('loads settings and saves projected device fields without crypto.randomUUID
 });
 
 test('shows saved connections from both rooms and corrects a rejected standalone probe', async ({page}) => {
-  const home = '00000000-0000-4000-8000-000000000001';
   const probe = 'sensor.synthetic_hall_temperature';
   let data: Record<string, unknown>;
   let writes = 0;
   await page.route('**/api/configuration/get', async route => {
+    const base = await (await route.fetch()).json();
     data = {
-      ...await (await route.fetch()).json(),
+      ...base,
       rooms: {hall: 'Hall', office: 'Office'},
       devices: [],
       entities: [{entity_id: probe, name: 'Hall probe', domain: 'sensor', area_id: 'hall',
         device_class: 'temperature', state_class: 'measurement', unit: '°C'}],
-      room_connections: {environment: 'test',
-        url: `https://test-smart-home-solutions.pages.dev/portal/home-profile?section=room-connections&home=${home}`,
-        connections: [{rooms: ['hall', 'office'], mode: 'varies'}]},
+      configuration: {...base.configuration,
+        room_connections: {revision: 1, connections: [{rooms: ['hall', 'office']}] }},
     };
     await route.fulfill({json: data});
   });
@@ -398,7 +503,7 @@ test('shows saved connections from both rooms and corrects a rejected standalone
   await editor.getByRole('button', {name: 'Rooms', exact: true}).click();
   const connections = editor.locator('.room-connections');
   await expect(connections.getByText('Office', {exact: true})).toBeVisible();
-  await expect(connections.getByRole('link')).toHaveAttribute('href', new RegExp(`home=${home}&room=hall$`));
+  await expect(connections.getByRole('link')).toHaveCount(0);
   await editor.getByRole('button', {name: 'Office', exact: true}).click();
   await expect(connections.getByText('Hall', {exact: true})).toBeVisible();
   await editor.getByRole('button', {name: 'Hall', exact: true}).click();

@@ -17,23 +17,6 @@ def comfort_website_url(base_url, home_id):
     return shs_const.website_url(base_url, f"/portal/energy-modeling?{query}")
 
 
-def room_connections_view(engine):
-    # Prefer the controlling home once it supports the feature. During the test
-    # rollout the paired observer can expose its own profile without taking control.
-    for environment in (engine.environment, *(key for key in engine.households if key != engine.environment)):
-        household = engine.households[environment]
-        if not household.room_observations_supported:
-            continue
-        home_id = engine.backends.credentials(environment).get(shs_const.CONF_HOME_ID)
-        if not home_id:
-            continue
-        query = urlencode({"section": "room-connections", "home": home_id})
-        url = shs_const.website_url(household.client.base_url, f"/portal/home-profile?{query}")
-        if url:
-            return {"url": url, "environment": environment, "connections": household.room_connections}
-    return None
-
-
 async def configuration_payload(editor, *, refresh_roles):
     coordinator = editor.engine.household
     portal_error: str | None = None
@@ -127,7 +110,6 @@ async def configuration_payload(editor, *, refresh_roles):
         "comfort_website_url": comfort_website_url(
             coordinator.client.base_url, editor.engine.backends.credentials().get(shs_const.CONF_HOME_ID),
         ),
-        "room_connections": room_connections_view(editor.engine),
         "configured_keys": list(editor.engine.configuration.options()),
         "meter_inventory": [{"key": d["key"], "name": device_name(entity_names.get(d["key"]) or d["name"])} for d in requested],
         "entry": {
