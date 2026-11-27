@@ -8,7 +8,7 @@ from .household_ports import HouseholdReadError
 
 # Increment when counter settlement/qualification semantics change. Stored
 # observations carry this provenance even when an older payload is retried.
-COUNTER_PROCESSING_REVISION = 1
+COUNTER_PROCESSING_REVISION = 2
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,10 +56,9 @@ class CounterReader:
             values: list[tuple[datetime, float]] = []
             invalidated: set[datetime] = set()
             for row in rows:
-                # The recorder returns the bucket that starts exactly on end,
-                # so the still-running current day/hour would otherwise be
-                # pushed as if it were complete. Keep the window half-open.
-                if row.start >= end_utc or (lookback and row.start < start_utc):
+                # Keep the preceding bucket as catch-up evidence, but never
+                # include the still-running bucket at the end of the window.
+                if row.start >= end_utc:
                     continue
                 if row.verdict == "unknown":
                     if row.invalidated:
@@ -87,7 +86,8 @@ class CounterReader:
                         first.isoformat(), energy, caught_up.isoformat(), bound_w / 1000 * seconds / 3600)
                 if open_ended and (self.open_catch_up is None or open_ended > self.open_catch_up):
                     self.open_catch_up = open_ended
-            result[entity_id] = values
+            result[entity_id] = [(at, energy) for at, energy in values if at >= start_utc]
+            invalidated = {at for at in invalidated if at >= start_utc}
             if invalidated:
                 result.invalidated[entity_id] = invalidated
         return result

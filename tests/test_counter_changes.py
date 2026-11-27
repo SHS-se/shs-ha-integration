@@ -177,6 +177,17 @@ class CatchUpTests(unittest.TestCase):
         self.assertEqual(retract_catch_ups(lump, float("nan"), 300)[0], lump)
         self.assertEqual(retract_catch_ups(lump, 0, 300)[0], lump)
 
+    def test_continuously_advancing_counter_keeps_uneven_reports_above_power_peak(self):
+        # Synthetic charging increments straddle reporting buckets unevenly.
+        samples = self.samples(.72, .84, 1.02, .86, 1.06, .79)
+        self.assertEqual(retract_catch_ups(samples, .95, 300), (samples, [], None))
+        quarters = aggregate_device_changes({"charger": samples})
+        self.assertEqual([row["device_energy_kwh"]["charger"] for row in quarters], [2.58, 2.71])
+
+    def test_a_leading_peak_without_stall_evidence_is_not_discarded(self):
+        samples = self.samples(1.02, .86, .79)
+        self.assertEqual(retract_catch_ups(samples, .95, 300), (samples, [], None))
+
     def test_two_stalls_are_each_retracted(self):
         samples = self.samples(0, 5.0, .2, 0, 0, 7.0, .1)
         kept, stalls, open_ended = retract_catch_ups(samples, 1.1, 300)
@@ -200,6 +211,27 @@ class HouseholdReadTests(unittest.IsolatedAsyncioTestCase):
 
     def series(self, readings):
         return recorder_rows(readings, 7, start=at(-5))
+
+    async def test_continuous_charging_keeps_first_peak_and_trims_window_edges(self):
+        # Synthetic five-minute reports; the last bucket is still in progress.
+        rows = [{"start": at(minute).timestamp(), "change": value}
+                for minute, value in [(-5, .8), (0, 1.02), (5, .86), (10, .79), (15, 50.)]]
+        rig = self.rig({"sensor.charger": rows}, {})
+        rig.household._counter_bounds_w = {"sensor.charger": 11400}
+        changes = await rig.household._statistics_changes(["sensor.charger"], at(0), at(15), "5minute")
+        self.assertEqual(changes["sensor.charger"], [(at(0), 1.02), (at(5), .86), (at(10), .79)])
+        self.assertEqual(changes.invalidated, {})
+        self.assertIsNone(rig.household._open_catch_up)
+
+    async def test_preceding_flat_bucket_identifies_catchup_at_window_start(self):
+        rows = [{"start": at(minute).timestamp(), "change": value}
+                for minute, value in [(-5, 0.), (0, 2.), (5, .8), (10, .7)]]
+        rig = self.rig({"sensor.charger": rows}, {})
+        rig.household._counter_bounds_w = {"sensor.charger": 11400}
+        changes = await rig.household._statistics_changes(["sensor.charger"], at(0), at(15), "5minute")
+        self.assertEqual(changes["sensor.charger"], [(at(5), .8), (at(10), .7)])
+        self.assertEqual(changes.invalidated, {"sensor.charger": {at(0)}})
+        self.assertEqual(rig.household._open_catch_up, at(0))
 
     async def test_a_bad_reading_costs_one_quarter_of_one_device(self):
         steady = [(-5, 10.0)] + [(minute, 10.0 + minute * .01) for minute in range(0, 31, 5)]

@@ -6,7 +6,7 @@ import unittest
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components/shs_energy"))
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from shs_core.device_observations import (
     current_power_setting, device_observation_entities, history_resend_window, observation_signature,
@@ -114,8 +114,16 @@ class EntityTests(unittest.TestCase):
         """The identity an earlier release stored no longer matches, so history is re-sent."""
         one = {"heater": {"setting": "number.nibe"}}
         self.assertNotEqual(observation_signature(one), '{"heater":{"setting":"number.nibe"}}')
-        # A home that observes nothing has nothing to send again.
-        self.assertEqual(observation_signature({}), "{}")
+        # Energy corrections need a new sweep even without optional observations.
+        self.assertNotEqual(observation_signature({}), "{}")
+
+    def test_counter_policy_corrections_resend_energy_with_or_without_optional_observations(self):
+        from shs_core.counter_reading import COUNTER_PROCESSING_REVISION
+        for entities in ({}, {"charger": {"setting": "number.charger"}}):
+            before = observation_signature(entities)
+            with patch("shs_core.device_observations.COUNTER_PROCESSING_REVISION", COUNTER_PROCESSING_REVISION + 1):
+                self.assertNotEqual(observation_signature(entities), before)
+            self.assertEqual(observation_signature(entities), before)
 
     def test_the_resend_walks_back_one_stretch_at_a_time_to_what_the_website_accepts(self):
         signature, end = observation_signature({"heater": {"setting": "number.nibe"}}), at(0)

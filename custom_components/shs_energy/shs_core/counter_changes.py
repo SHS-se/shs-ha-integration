@@ -25,9 +25,11 @@ needs it stays incomplete.
 A counter can also stall: the source keeps its last reading while the link to
 the equipment is down, then catches up in one step. Nothing in the counter
 contradicts itself, so the stored readings cannot show it. What can is the
-equipment: a period's energy above what it can draw at its greatest recorded
-power is not that period's own. ``retract_catch_ups`` leaves such a sample
-out, together with the run of zero samples before it. The total across the
+equipment: a flat counter followed by energy above its greatest recorded
+power suggests a catch-up. ``retract_catch_ups`` leaves that sample out,
+together with the run of zero samples before it. A continuously advancing
+counter can cross the power envelope because its reporting buckets are uneven;
+a power peak alone does not disprove its energy. The total across the
 stall was really used; when, nobody measured, and a zero from a counter that
 did not move is not a measurement of zero.
 
@@ -211,7 +213,7 @@ def settled_energy(row: CounterRow, readings: list[tuple[datetime, float]]) -> f
 def retract_catch_ups(
     samples: list[tuple[datetime, float]], limit_kwh: float, period_seconds: float,
 ) -> tuple[list[tuple[datetime, float]], list[tuple[datetime, datetime, float]], datetime | None]:
-    """Leave out each sample above ``limit_kwh`` and the zero samples it caught up for.
+    """Leave out catch-ups after a flat counter or a gap, preserving continuous reports.
 
     ``samples`` are one counter's trusted ``(start, kWh)`` samples in time
     order; ``limit_kwh`` is what the equipment can use in one period at its
@@ -232,6 +234,11 @@ def retract_catch_ups(
         while first > 0 and samples[first - 1][1] == 0 and first - 1 not in dropped \
                 and (samples[first][0] - samples[first - 1][0]).total_seconds() == period_seconds:
             first -= 1
+        # A sampled power maximum is not an energy validity limit. Require
+        # a flat counter or a missing interval before inferring a catch-up.
+        gap_before = index > 0 and (start - samples[index - 1][0]).total_seconds() > period_seconds
+        if first == index and not gap_before:
+            continue
         dropped.update(range(first, index + 1))
         stalls.append((samples[first][0], start, energy))
         if first == 0:

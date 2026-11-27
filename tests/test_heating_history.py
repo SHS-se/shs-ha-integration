@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 sys.path.append(str(Path(__file__).parents[1] / "custom_components/shs_energy"))
+from shs_core.counter_reading import COUNTER_PROCESSING_REVISION
 from shs_core.heating_history import (HeatingRoomBinding, heating_history_sources, heating_history_window,
                                       accepted_heating_cursor, heating_recent_window)
 from shs_core.api import ShsApiClient
@@ -93,7 +94,7 @@ class NativeHeatingHistoryTests(unittest.IsolatedAsyncioTestCase):
         recorder.energy("sensor.energy_a", "hour", [.5])
         result = await capture(recorder)
         self.assertEqual(len(result.observations), 1)
-        self.assertEqual(result.observations[0]["counter_processing_revision"], 1)
+        self.assertEqual(result.observations[0]["counter_processing_revision"], COUNTER_PROCESSING_REVISION)
         row = result.observations[0]
         self.assertEqual(row["duration_s"], 3600)
         self.assertEqual(row["source"], "recorder_hour_mean")
@@ -204,7 +205,7 @@ class NativeHeatingHistoryTests(unittest.IsolatedAsyncioTestCase):
         repaired = await capture(recorder, household=household, end=START + timedelta(hours=3))
         self.assertEqual([row["duration_s"] for row in repaired.observations], [3600] * 3)
         self.assertTrue(all(row["invalidated_device_keys"] == ["heater"] for row in repaired.observations))
-        self.assertTrue(all(row["counter_processing_revision"] == 1 for row in repaired.observations))
+        self.assertTrue(all(row["counter_processing_revision"] == COUNTER_PROCESSING_REVISION for row in repaired.observations))
 
     async def test_absent_counter_and_missing_predecessor_do_not_withdraw_previous_measurements(self):
         recorder = Recorder()
@@ -360,7 +361,7 @@ class HeatingSourceTests(unittest.TestCase):
         value = heating_history_sources(devices, mappings, rooms,
             lambda _: SimpleNamespace(attributes={"hvac_modes": ["heat", "off"]}))
         before = value.signature
-        with patch("shs_core.heating_history.COUNTER_PROCESSING_REVISION", 2):
+        with patch("shs_core.heating_history.COUNTER_PROCESSING_REVISION", COUNTER_PROCESSING_REVISION + 1):
             self.assertNotEqual(value.signature, before)
         self.assertEqual(value.signature, before)
 

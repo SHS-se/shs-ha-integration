@@ -20,6 +20,7 @@ import json
 from math import isfinite
 from typing import Any
 
+from .counter_reading import COUNTER_PROCESSING_REVISION
 from .device_controls import device_planning_path
 from .grid_capacity import power_setting_value
 
@@ -69,9 +70,10 @@ OBSERVATION_REVISION = 2
 def observation_signature(entities: dict[str, dict[str, str]]) -> str:
     """Identity of what is observed; a change re-sends the retained history once.
 
-    A home that observes nothing has nothing to send again, at any revision.
+    Counter-policy corrections also re-send energy without optional observations.
     """
-    identity: dict[str, Any] = {"revision": OBSERVATION_REVISION, "observed": entities} if entities else {}
+    identity: dict[str, Any] = {"revision": OBSERVATION_REVISION, "observed": entities,
+                                "counter_processing_revision": COUNTER_PROCESSING_REVISION}
     return json.dumps(identity, sort_keys=True, separators=(",", ":"))
 
 
