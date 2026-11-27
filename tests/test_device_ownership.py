@@ -35,6 +35,21 @@ class OwnershipTests(unittest.IsolatedAsyncioTestCase):
         first['originals']['switch.old'] = 'changed in memory'
         self.assertEqual(restored.records['pool']['originals']['switch.old'], 'off')
 
+    async def test_old_heat_only_numeric_ownership_is_upgraded_once_at_load(self):
+        store = Store()
+        store.value = {'records': {'device:unit': {
+            'options': {'device_control_mappings': {'unit': {'control_type': 'setpoint'}}},
+            'originals': {'climate.unit': 21}}}}
+        owner = DeviceOwnership(store)
+        await owner.load()
+        self.assertEqual(store.value['records']['device:unit']['original_hvac_modes'], {'climate.unit': 'heat'})
+        store.started.clear()
+        await owner.load()
+        self.assertFalse(store.started.is_set())
+        await owner.capture('device:unit', {}, {'climate.unit': 18}, original_hvac_modes={'climate.unit': 'off'})
+        self.assertEqual(owner.records['device:unit']['original_hvac_modes'], {'climate.unit': 'heat'})
+        self.assertEqual(owner.records['device:unit']['originals'], {'climate.unit': 21})
+
     async def test_save_captures_a_private_value_before_awaiting(self):
         store = Store()
         owner = DeviceOwnership(store)

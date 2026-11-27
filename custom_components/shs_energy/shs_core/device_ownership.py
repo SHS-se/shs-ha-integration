@@ -19,6 +19,13 @@ def decode_ownership(value):
                 or type(record.get('options')) is not dict or type(record.get('originals')) is not dict
                 or any(type(entity) is not str or not entity for entity in record['originals'])):
             raise ValueError('Invalid captured device settings')
+        mapping = record['options'].get('device_control_mappings', {}).get(device.removeprefix('device:'), {})
+        if device.startswith('device:') and mapping.get('control_type') == 'setpoint' and 'original_hvac_modes' not in record:
+            # Previous versions captured numeric climate targets only in Heat.
+            # Upgrade the historical baseline independently of today's live mode.
+            modes = {entity: 'heat' for entity in record['originals'] if entity.startswith('climate.')}
+            if modes:
+                record['original_hvac_modes'] = modes
     overrides = value.get('overrides', {})
     if any(type(key) is not str or type(reason) is not str for key, reason in overrides.items()):
         raise ValueError('Invalid device override record')
@@ -45,6 +52,8 @@ class DeviceOwnership:
         value = await self.store.async_load()
         decoded = decode_ownership(value if value is not None else {})
         self.records, self.overrides, self.retired_pool_temperature_settings = decoded
+        if value and self.records != value.get('records', {}):
+            await self.save()
 
     def snapshot(self):
         return deepcopy({'records': self.records, 'overrides': self.overrides,
@@ -61,9 +70,14 @@ class DeviceOwnership:
             await self.store.async_save({**self.snapshot(), 'records': deepcopy(remaining)})
             self.records = remaining
 
-    async def capture(self, device, options, originals):
+    async def capture(self, device, options, originals, *, original_hvac_modes=None):
         if device in self.records:
             return self.records[device]
-        self.records[device] = {'options': deepcopy(options), 'originals': deepcopy(originals)}
-        await self.save()
-        return self.records[device]
+        record = {'options': deepcopy(options), 'originals': deepcopy(originals)}
+        if original_hvac_modes:
+            record['original_hvac_modes'] = dict(original_hvac_modes)
+        snapshot = self.snapshot()
+        snapshot['records'][device] = deepcopy(record)
+        await self.store.async_save(snapshot)
+        self.records[device] = record
+        return record

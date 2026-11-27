@@ -110,6 +110,18 @@ class NativeAction:
 
 
 @dataclass(frozen=True)
+class OffTemperature(NativeAction):
+    """Restore a saved temperature with an explicit Off mode in the same HA call."""
+    hvac_mode: str = 'off'
+
+    def service_call(self):
+        domain, service, data = super().service_call()
+        if (domain, service, self.hvac_mode) != ('climate', 'set_temperature', 'off'):
+            raise ValueError('Invalid dormant thermostat target')
+        return domain, service, {**data, 'hvac_mode': 'off'}
+
+
+@dataclass(frozen=True)
 class Command:
     id: str
     origin: str

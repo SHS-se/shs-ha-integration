@@ -22,6 +22,7 @@ from homeassistant.util.json import json_loads
 from .configuration import (area_name_by_id, entity_area_id, entity_area_id_by_id,
                             entity_display_name_by_id, resolved_options)
 from .recorder_source import RecorderSource
+from .shs_core.command_journal import OffTemperature
 from .shs_core.household_ports import HouseholdReadError, ConfigurationChanged
 from .gateway_wire import ProjectionAssembly, filter_sources
 from .shs_wire.protocol import admit, offer
@@ -811,8 +812,11 @@ class HomeAssistantSource:
                 settled_order = row.get('settled', {}).get('order', -1)
                 for effect in row['effects'].values():
                     controls = effect['controls']
-                    if effect['order'] > settled_order and entity in controls and value > finite(controls[entity]):
-                        return False
+                    if effect['order'] > settled_order and entity in controls:
+                        pending = controls[entity]
+                        # Heat activation reserves the peak but sets no numerical target.
+                        if pending != 'heat' and value > finite(pending):
+                            return False
         except (TypeError, ValueError):
             return False
         return True
@@ -856,7 +860,8 @@ class HomeAssistantSource:
 
     def describe_command(self, command):
         action = command.action
-        if action.service == 'turn_off' or action.service == 'set_hvac_mode' and action.value == 'off':
+        if (action.service == 'turn_off' or action.service == 'set_hvac_mode' and action.value == 'off'
+                or isinstance(action, OffTemperature)):
             return self.describe_stop(action.entity)
         value = action.service.removeprefix('turn_') if action.service in ('turn_on', 'turn_off') else action.value
         effect = self.describe_import(command.device, action.entity, value)
@@ -964,7 +969,8 @@ class HomeAssistantSource:
 
     def check_command(self, command):
         action = command.action
-        if action.service == 'turn_off' or action.service == 'set_hvac_mode' and action.value == 'off':
+        if (action.service == 'turn_off' or action.service == 'set_hvac_mode' and action.value == 'off'
+                or isinstance(action, OffTemperature)):
             return
         if action.service == 'set_temperature' and self.lowers_heating_target(action.entity, action.value):
             return

@@ -15,6 +15,7 @@ import test_battery_gateway as battery_fixtures
 from gateway_fixture import IDENTITY
 from gateway_wire import filter_sources
 from test_execution_mode_select import load_adapter
+from shs_core.command_journal import OffTemperature
 from shs_core.controller_inputs import configured_entity_ids
 from shs_core.gateway_journal import digest, GatewayConflict
 from shs_core.gateway_service import GatewayService
@@ -217,7 +218,7 @@ class MetadataTests(unittest.IsolatedAsyncioTestCase):
             required_import=required_import, import_limit=import_limit, SigenAdapter=SigenAdapter,
             ControlDeadlineError=ControlDeadlineError, HeatingDeferred=HeatingDeferred, empty_capacity=empty_capacity, capacity_bound=capacity_bound,
             commanded_controls=commanded_controls, _current=_current, EV_WATTS_PER_AMP=EV_WATTS_PER_AMP, actuator_targets=actuator_targets, device_power_bound=device_power_bound, PowerHistoryError=PowerHistoryError,
-            observe_power_peak=observe_power_peak, observe_setting_peak=observe_setting_peak, merge_power_peaks=merge_power_peaks, RetryBackoff=RetryBackoff, capacity_key=capacity_key, house_meter_errors=house_meter_errors,
+            OffTemperature=OffTemperature, observe_power_peak=observe_power_peak, observe_setting_peak=observe_setting_peak, merge_power_peaks=merge_power_peaks, RetryBackoff=RetryBackoff, capacity_key=capacity_key, house_meter_errors=house_meter_errors,
             HouseMeterError=HouseMeterError, GridCapacityConfigurationError=GridCapacityConfigurationError, ControlObservationError=ControlObservationError,
             battery_import_bound=battery_import_bound, battery_discharge_ceiling=battery_discharge_ceiling, CHARGING_MODES=CHARGING_MODES, device_mode=device_mode,
             promised_credit_w=promised_credit_w, proportional_supply=proportional_supply))

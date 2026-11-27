@@ -216,6 +216,36 @@ class VerificationTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertEqual(self.journal.export()['coverage'][0]['missing'], [])
 
+    async def test_off_room_verifies_activation_and_both_handover_settings_without_writes(self):
+        import test_device_commands
+        from types import SimpleNamespace
+        test_device_commands.DeviceExecutionTests.setUp(self)
+        self.controller.verification = self.journal
+        self.controller.confirm = ScheduledController.confirm.__get__(self.controller)
+        self.options['device_modes']['heater'] = 'control_verification'
+        self.options['device_control_mappings']['heater'].update(control_type='setpoint',
+            actuator_entity_ids=['climate.room'])
+        models = [{'key': 'heater', 'category': 'heating', 'control_type': 'setpoint'}]
+        self.coordinator.optimisation_plan['device_models'] = models
+        self.coordinator.async_cached_device_configuration = AsyncMock(return_value=models)
+        self.hass.config = SimpleNamespace(units=SimpleNamespace(temperature_unit='°C'))
+        self.states['climate.room'] = fixtures.State('off', min_temp=5, max_temp=30, target_temp_step=1,
+            hvac_modes=['off', 'heat'], temperature=25, current_temperature=18, hvac_action='off')
+        self.slot['device_commands']['heater'] = {'type':'setpoint', 'target_c':21, 'room_target_c':21,
+                                                  'minimum_c':5, 'maximum_c':30}
+        await self.controller.async_start()
+        attempt = self.journal.attempts[0]
+        self.assertEqual(attempt['outcome'], 'verified', attempt)
+        self.assertEqual([(c['phase'], c['service'], c['value']) for c in attempt['commands'] if c['would_call']],
+                         [('plan', 'set_hvac_mode', 'heat'), ('plan', 'set_temperature', 21),
+                          ('handover', 'set_hvac_mode', 'off'), ('handover', 'set_temperature', 25)])
+        self.assertEqual(attempt['commands'][-1]['data']['hvac_mode'], 'off')
+        self.assertEqual(self.states['climate.room'].state, 'off')
+        self.assertEqual(self.states['climate.room'].attributes['temperature'], 25)
+        self.assertFalse(self.calls)
+        self.assertFalse(self.controller.ownership.records)
+        self.assertIsNone(self.store.saved)
+
     async def test_generic_permit_and_inhibit_use_shared_verification_log(self):
         import test_device_commands
         test_device_commands.DeviceExecutionTests.setUp(self)

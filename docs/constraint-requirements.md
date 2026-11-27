@@ -50,6 +50,13 @@ Heat selected and changes only the setpoint. The hold on missing readings and
 the separation of pending effects from measured draw are unchanged. See
 [live priority across whole runs](run-priority.md).
 
+User requirement, 27 November 2026. Controlling can activate Heat on a reviewed
+Off room thermostat that advertises Heat and Off. The normal house import and
+live priority checks apply before the mode command, even if the planned target
+is below the saved target. Verification models the same operation without a
+device write. Explicit handover restores the captured mode and saved target as
+described in [control continuity](control-continuity.md).
+
 Process events in the order received. Our own locally generated revisions may
 track that order and identify superseded work. Timestamps from devices or other
 sources must not be used to infer event ordering or reject a later received

@@ -1,5 +1,6 @@
 """Exercise the physical gateway boundary with the real durable transport."""
 import asyncio
+from dataclasses import replace
 from contextlib import closing
 from pathlib import Path
 import sqlite3
@@ -8,7 +9,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 sys.path.append(str(Path(__file__).parents[1]/'custom_components/shs_energy'))
-from shs_core.command_journal import Command, CommandJournal, NativeAction
+from shs_core.command_journal import Command, CommandJournal, NativeAction, OffTemperature
 from shs_core.command_transport import CommandTransport, CommandNotSent
 from shs_core.native_commands import NativeExecutor, native_command
 
@@ -68,6 +69,20 @@ class NativeTests(unittest.IsolatedAsyncioTestCase):
         await self.executor.execute(self.command, authorize=self.authorize, timeout=1)
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.status(), 'service_returned')
+
+    async def test_off_restoration_revalidates_mode_and_phase_at_dispatch(self):
+        self.state = SimpleNamespace(state='off', attributes=dict(min_temp=5, max_temp=35, temperature=21,
+                                                                  hvac_modes=['off', 'heat']))
+        command = Command('restore', 'controller', 'device:room', 'handover',
+                          OffTemperature('climate.room', 'set_temperature', 28))
+        with self.assertRaisesRegex(CommandNotSent, 'handover'):
+            await self.executor.execute(replace(command, id='invalid', phase='plan'), authorize=self.authorize, timeout=1)
+
+        def authorize():
+            self.state.state = 'heat'  # Received after durable preparation.
+        with self.assertRaises(CommandNotSent):
+            await self.executor.execute(command, authorize=authorize, timeout=1)
+        self.assertFalse(self.calls)
 
     async def test_shared_validator_covers_native_steps_modes_and_celsius(self):
         with self.assertRaisesRegex(ValueError, 'supported step'):

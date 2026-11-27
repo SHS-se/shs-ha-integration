@@ -27,6 +27,17 @@ Verification and identifies a previous mapped actuator that is still active.
 SHS accounts for held loads and issued commands when admitting other devices.
 Only a current battery writer can promise discharge for a new load.
 
+## Room thermostat Heat activation
+
+User requirement, 27 November 2026. Controlling may switch a reviewed room
+heating thermostat from Off to Heat for the accepted room setpoint. Before
+activation, the gateway captures its native mode and saved target, checks the
+thermostat readings and advertised Heat/Off modes, and admits the heater's full
+startup demand. The saved target can call for heat immediately. After Heat is
+reported, SHS applies the planned target. Live priority may keep the thermostat
+Off. Other HVAC modes remain with their existing owner. Verification simulates
+the same settings in memory.
+
 ## What restores captured settings
 
 These explicit actions can return a device SHS still owns to the baseline
@@ -40,6 +51,13 @@ captured when SHS first took control.
 If the actuator is unavailable when a release is due, the handover waits and
 completes as soon as it reports (status `pending`, then `fault` after five
 minutes). Returning to Controlling or switching to Verification cancels it.
+
+For a room thermostat captured in Off, an explicit release restores Off before
+restoring its saved target with Off selected. A device that cannot confirm both
+settings stays pending. A target changed externally since SHS last set it is
+preserved. An external change to a different HVAC mode is also preserved. Older
+ownership records with a numerical thermostat target were captured in Heat;
+loading them records that original Heat mode independently of the current mode.
 
 Re-admission after a change to what the group executes starts in Verification.
 It follows the same no-write rule as choosing Verification on the select.

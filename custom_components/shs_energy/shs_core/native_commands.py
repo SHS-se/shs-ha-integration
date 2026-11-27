@@ -6,7 +6,7 @@ again against fresh observations at the final dispatch boundary.
 from dataclasses import dataclass
 from math import isfinite
 
-from .command_journal import NativeAction
+from .command_journal import NativeAction, OffTemperature
 from .native_numbers import canonical_metadata, equal as numbers_equal
 
 
@@ -19,6 +19,30 @@ def finite(value):
     return result
 
 
+def supports_heat_activation(attributes):
+    modes = attributes.get('hvac_modes')
+    return isinstance(modes, (list, tuple)) and 'heat' in modes and 'off' in modes
+
+
+def native_thermostat_facts(entity, state):
+    if state is None or state.state not in ("heat", "off"):
+        return None
+    attrs = state.attributes
+    fields = dict(minimum_c="min_temp", maximum_c="max_temp", step_c="target_temp_step",
+                  current_temperature_c="current_temperature", target_temperature_c="temperature")
+    values = {key: attrs.get(attribute) for key, attribute in fields.items()}
+    if (any(type(v) not in (int, float) or not isfinite(v) for v in values.values())
+            or values["step_c"] <= 0 or values["maximum_c"] < values["minimum_c"]
+            or not values["minimum_c"] <= values["target_temperature_c"] <= values["maximum_c"]
+            or (state.state == "heat" and attrs.get("hvac_action") not in ("heating", "idle", "off"))):
+        return None
+    # Mode and the native capability to resume Heat are independent of the latch.
+    return dict(entity_id=entity, **values,
+                **({'can_activate_heat': supports_heat_activation(attrs)} if state.state == 'off' else {}),
+                hvac_action="off" if state.state == "off" else
+                "heating" if attrs["hvac_action"] == "heating" else "idle")
+
+
 @dataclass(frozen=True)
 class NativeCommand:
     action: NativeAction
@@ -26,7 +50,7 @@ class NativeCommand:
     equal: bool
 
 
-def native_command(entity, value, state, *, temperature_unit):
+def native_command(entity, value, state, *, temperature_unit, restore_off_target=False):
     """Validate a closed actuator setting using current native metadata."""
     if state is None:
         raise ValueError(f'{entity} is unavailable')
@@ -42,16 +66,24 @@ def native_command(entity, value, state, *, temperature_unit):
         if value in ('off', 'heat'):
             if value not in state.attributes.get('hvac_modes', ()) or temperature_unit != '°C':
                 raise ValueError(f'{entity}: thermostat mode is unavailable')
+            if value == 'heat' and (state.state not in ('off', 'heat') or
+                                    state.state == 'off' and not supports_heat_activation(state.attributes)):
+                raise ValueError(f'{entity}: thermostat cannot activate Heat from its current mode')
             return NativeCommand(NativeAction(entity, 'set_hvac_mode', value), value, state.state == value)
         value = finite(value)
         low, high = finite(state.attributes['min_temp']), finite(state.attributes['max_temp'])
-        if state.state != 'heat' or temperature_unit != '°C':
+        required_mode = 'off' if restore_off_target else 'heat'
+        if restore_off_target and 'off' not in state.attributes.get('hvac_modes', ()):
+            raise ValueError(f'{entity}: thermostat Off mode is unavailable')
+        if state.state != required_mode or temperature_unit != '°C':
             raise ValueError(f'{entity}: setpoint execution requires an active Celsius heating thermostat')
         if not low <= value <= high:
             raise ValueError(f'{entity}: target outside hardware bounds')
         service = 'set_temperature'
         measured = state.attributes.get('temperature')
         equal = measured is not None and abs(finite(measured) - value) < 1e-6
+        if restore_off_target:
+            return NativeCommand(OffTemperature(entity, service, value), value, equal)
     elif domain in ('select', 'input_select'):
         if value not in state.attributes.get('options', []):
             raise ValueError(f'{entity}: unsupported mode {value}')
@@ -100,7 +132,10 @@ class NativeExecutor:
             value = (action.service.removeprefix('turn_') if action.service in ('turn_on', 'turn_off')
                      else action.value)
             try:
+                if isinstance(action, OffTemperature) and command.phase != 'handover':
+                    raise ValueError('The dormant target can only be restored during handover')
                 current = native_command(action.entity, value, self.read_state(action.entity),
+                    restore_off_target=isinstance(action, OffTemperature),
                     temperature_unit=self.temperature_unit() if action.entity.startswith('climate.') else None)
                 if current.action != action:
                     # Keep the adapter's exact wire scalar (Sigen truncates its

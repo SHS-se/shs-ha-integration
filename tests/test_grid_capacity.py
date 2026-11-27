@@ -12,7 +12,7 @@ import test_battery_gateway as battery
 from shs_core.grid_capacity import (required_import, import_limit, empty_capacity,
     prepare_capacity, finish_capacity, observe_capacity, capacity_bound, dispatch_capacity, commanded_controls,
     capacity_key, canonicalize_capacity)
-from shs_core.command_journal import Command, NativeAction
+from shs_core.command_journal import Command, NativeAction, OffTemperature
 from shs_core.device_draw import DeviceDraw, DrawBinding
 from shs_core.device_operations import ControlDeadlineError, ControlObservationError, DeviceOperations, checked_state
 from shs_core.device_gateway import DeviceIntent, DeviceGateway
@@ -48,6 +48,36 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.source.lowers_heating_target(entity, 19))
         self.rows[entity]['state'] = 'off'
         self.assertFalse(self.source.lowers_heating_target(entity, 19))
+
+    async def test_room_heat_reserves_full_start_and_off_handover_survives_receipt_worker(self):
+        self.configure_ev()
+        owner, entity = 'device:room', 'climate.room'
+        self.mapped_load('room', entity, 'off', 2400, 'controlling')
+        self.rows[entity]['attributes'].update(min_temp=5, max_temp=35, temperature=29, hvac_modes=['off', 'heat'])
+        self.rows['sensor.house']['state'] = '9000'
+        self.service.import_limit_w = 10000
+        self.assertEqual(self.source.describe_import(owner, entity, 'heat')['possible_w'], 2400)
+        with self.assertRaisesRegex(ControlDeadlineError, 'house import capacity'):
+            await self.native('denied-start', owner, entity, 'set_hvac_mode', 'heat')
+        self.assertFalse(self.calls)
+        self.rows['sensor.house']['state'] = '5000'
+        await self.native('start', owner, entity, 'set_hvac_mode', 'heat')
+        self.assertEqual(self.calls[-1], ('climate', 'set_hvac_mode', {'entity_id': entity, 'hvac_mode': 'heat'}))
+        self.rows[entity]['state'] = 'heat'
+        self.rows['sensor.house']['state'] = '12000'
+        self.assertTrue(self.source.lowers_heating_target(entity, 21))
+        await self.native('lower', owner, entity, 'set_temperature', 21)
+        await self.native('release-off', owner, entity, 'set_hvac_mode', 'off')
+        self.rows[entity].update(state='off')
+        self.rows[entity]['attributes']['temperature'] = 21
+        executor = self.physical.native_executor
+        dormant = Command('release-target', 'controller', owner, 'handover', OffTemperature(entity, 'set_temperature', 29))
+        await executor.execute(dormant, authorize=lambda:None, timeout=1)
+        self.assertEqual(self.calls[-1], ('climate', 'set_temperature',
+                         {'entity_id': entity, 'temperature': 29, 'hvac_mode': 'off'}))
+        count = len(self.calls)
+        await executor.execute(dormant, authorize=lambda:None, timeout=1)
+        self.assertEqual(len(self.calls), count)
 
     def configure_ev(self):
         options = self.source.configuration.options()

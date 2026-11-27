@@ -11,7 +11,7 @@ from time import perf_counter
 from uuid import uuid4
 
 from .command_journal import Command
-from .native_commands import finite, native_command
+from .native_commands import finite, native_command, native_thermostat_facts
 from .native_numbers import floor_native
 from .grid_capacity import EV_WATTS_PER_AMP, GridCapacityConfigurationError
 from .device_ownership import DeviceOwnership
@@ -229,13 +229,24 @@ class DeviceOperations:
                 return False
         return self.device != 'battery'
 
-    async def command(self, entity, value):
+    def check_room_heat_activation(self, entity, target):
+        facts = native_thermostat_facts(entity, self.actuator_state(entity))
+        if not facts or not facts.get('can_activate_heat') or self.inputs.temperature_unit() != '°C':
+            raise ControlObservationError('Room thermostat cannot confirm its Celsius settings and Heat/Off modes',
+                entity, 'Check the thermostat temperature, saved target, native step and supported modes.')
+        setting = rounded_setpoint(target, facts['minimum_c'], facts['step_c'])
+        if not facts['minimum_c'] <= setting <= facts['maximum_c']:
+            raise ValueError(f'{entity}: scheduled target outside hardware bounds')
+
+    async def command(self, entity, value, *, room_activation_target=None, restore_off_target=False):
         if self.battery_writer_fence is not None and not self.verifying:
             self.battery_writer_fence.check_device_command(entity)
         self.check_authority()
         domain = entity.split(".")[0]
         state = ((self.shadow.get(entity) if self.verifying else None) or self.observed_state(entity)) if getattr(self, "device", None) == "battery" and domain == "number" else self.actuator_state(entity)
-        native = native_command(entity, value, state,
+        if room_activation_target is not None:
+            self.check_room_heat_activation(entity, room_activation_target)
+        native = native_command(entity, value, state, restore_off_target=restore_off_target,
                                 temperature_unit=self.inputs.temperature_unit() if domain == "climate" else None)
         value, equal = native.value, native.equal
         if equal and not self.verifying and self.native_executor.requires_command(entity, value):
@@ -263,11 +274,12 @@ class DeviceOperations:
                 "trigger": "if a baseline handover is requested" if self.restoring else "current binding slot",
                 "would_call": not equal})
             attributes = dict(state.attributes)
-            if domain == "climate":
+            if service == 'set_temperature':
                 attributes["temperature"] = value
-            self.shadow[entity] = SimpleNamespace(state=state.state if domain == "climate" else str(value), attributes=attributes)
+            next_state = state.state if service == 'set_temperature' else str(value)
+            self.shadow[entity] = SimpleNamespace(state=next_state, attributes=attributes)
             record = self.ownership.records.get(self.device)
-            if record is not None and not self.restoring:
+            if record is not None and not self.restoring and service != 'set_hvac_mode':
                 record.setdefault("last_commands", {})[entity] = value
             return
         command.update(called=False, transport="not_sent", settings_confirmation="not_checked")
@@ -279,13 +291,15 @@ class DeviceOperations:
             if not equal:
                 if self.battery_writer_fence is not None:
                     self.battery_writer_fence.check_device_command(entity)
-                if self.requires_grid_capacity(entity, value) and not self.before_external_command(self.device, entity=entity, value=value):
+                if not restore_off_target and self.requires_grid_capacity(entity, value) and not self.before_external_command(self.device, entity=entity, value=value):
                     if self.scheduler is not None:
                         self.scheduler.device_deadline(self.device,"battery_headroom",datetime.now(timezone.utc)+timedelta(seconds=5))
                     raise ControlDeadlineError("Waiting for battery charging to release grid capacity")
                 def authorize():
                     self.check_authority()
-                    if self.requires_grid_capacity(entity, value) and not self.before_external_command(self.device, entity=entity, value=value):
+                    if room_activation_target is not None:
+                        self.check_room_heat_activation(entity, room_activation_target)
+                    if not restore_off_target and self.requires_grid_capacity(entity, value) and not self.before_external_command(self.device, entity=entity, value=value):
                         raise ControlDeadlineError('Waiting for battery charging to release grid capacity')
                     if self.battery_writer_fence is not None:
                         self.battery_writer_fence.check_device_command(entity)
@@ -410,14 +424,20 @@ class DeviceOperations:
     async def capture(self, device, options, entities):
         if device in self.ownership.records:
             return self.ownership.records[device]
-        originals = {entity: (self.state(entity).attributes["temperature"] if entity.startswith("climate.")
-                              else self.state(entity).state) for entity in entities if entity}
+        states = {entity: self.actuator_state(entity) for entity in entities if entity}
+        originals = {entity: state.attributes["temperature"] if entity.startswith("climate.") else state.state
+                     for entity, state in states.items()}
+        mapping = options.get('device_control_mappings', {}).get(device.removeprefix('device:'), {})
+        modes = {entity: state.state for entity, state in states.items()
+                 if device.startswith('device:') and mapping.get('control_type') == 'setpoint' and entity.startswith('climate.')}
         if self.verifying:
             # Verification owns only a hypothetical record, never a disk write.
             record = {"options": deepcopy(options), "originals": originals}
+            if modes:
+                record['original_hvac_modes'] = modes
             self.ownership.records[device] = record
             return record
-        return await self.ownership.capture(device, options, originals)
+        return await self.ownership.capture(device, options, originals, original_hvac_modes=modes)
 
     async def restore(self, device):
         self.device = device
@@ -447,11 +467,24 @@ class DeviceOperations:
                     record["externally_changed"] = sorted(changed)
                     await self.save()
                 for entity, value in original.items():
-                    if record.get('heating_suspended') == entity and self.actuator_state(entity).state == 'off':
+                    mode = record.get('original_hvac_modes', {}).get(entity)
+                    if mode and self.actuator_state(entity).state not in ('heat', 'off'):
+                        continue  # A different HVAC mode belongs to the outside writer.
+                    if mode == 'off':
+                        # An earlier Heat write may still be outstanding even when the equipment reads Off.
+                        await self.command(entity, 'off')
+                        await self.confirm(lambda: self.matches(entity, 'off'), 'Thermostat has not returned to Off')
+                    elif record.get('heating_suspended') == entity and self.actuator_state(entity).state == 'off':
                         await self.command(entity, 'heat')
                         await self.confirm(lambda: self.matches(entity, 'heat'), 'Thermostat has not returned to heating mode')
-                    if entity not in record.get("externally_changed", []):
-                        await self.command(entity, value)
+                    if entity not in changed:
+                        if mode and self.matches(entity, 'off'):
+                            # An earlier target may still be in flight even if the saved value is visible.
+                            await self.command(entity, value, restore_off_target=True)
+                            await self.confirm(lambda: self.matches(entity, 'off') and self.matches(entity, value),
+                                               'Thermostat has not confirmed its saved Off target')
+                        else:
+                            await self.command(entity, value)
             elif device == "battery":
                 # One-time handover of a persisted pre-native ownership record.
                 # This is not a battery policy or a physical-response gate.
@@ -1034,6 +1067,23 @@ class DeviceOperations:
                 await self.command(entity, 'heat')
                 if not self.matches(entity, 'heat'):
                     raise HeatingDeferred('Resuming scheduled heating')
+        reactivated = False
+        if (target_c is None and kind == 'setpoint' and model.get('category') == 'heating'
+                and device_planning_path(model) == 'room' and targets[0].startswith('climate.')
+                and self.matches(targets[0], 'off')):
+            entity = targets[0]
+            mode = device_mode(options, device)
+            if mode != ('control_verification' if self.verifying else 'controlling'):
+                raise ControlPlanError('Room Heat activation requires heating control permission')
+            if self.shed_scheduled_heat(entity, self.actuator_state(entity)):
+                return self.scheduled_heat_limited()
+            self.check_room_heat_activation(entity, command['target_c'])
+            record = await self.capture(device, options, targets)
+            # Heat may start at the saved target, even when the plan will lower it.
+            reactivated = entity in record.get('last_commands', {})
+            await self.command(entity, 'heat', room_activation_target=command['target_c'])
+            if not self.matches(entity, 'heat'):
+                raise HeatingDeferred('Waiting for the room thermostat to report Heat')
         commanded = dict(record.get("last_commands", {})) if record else {}
         for entity in commanded:
             # Unavailable is unknown, never an external change.
@@ -1089,6 +1139,8 @@ class DeviceOperations:
             values = {entity: "on" if on else "off" for entity in targets}
         reverted = {entity: state for entity, state in outside.items()
                     if target_c is None and entity in values and not self.matches(entity, values[entity])}
+        if reactivated:
+            reverted[targets[0]] = 'off'
         if reverted and not self.verifying:
             _LOGGER.warning("%s: switching back %s, changed outside SHS", device,
                             ", ".join(f"{entity} ({state})" for entity, state in reverted.items()))

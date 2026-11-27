@@ -20,6 +20,7 @@ from typing import Any, Callable, Optional
 from math import isfinite
 
 from .planning_warnings import planning_warning
+from .native_commands import native_thermostat_facts
 from .room_electrical import OnPowerEvidence, RUNNING_POWER_MODEL_METHOD, retain_running_power_model
 
 from .const import (
@@ -727,23 +728,7 @@ def thermostat_facts(mapping, read_state):
     if len(targets) != 1 or not targets[0].startswith("climate."):
         return None
     state = read_state(targets[0])
-    if state is None or state.state not in ("heat", "off"):
-        return None
-    attrs = state.attributes
-    fields = dict(minimum_c="min_temp", maximum_c="max_temp", step_c="target_temp_step",
-                  current_temperature_c="current_temperature", target_temperature_c="temperature")
-    values = {key: attrs.get(attribute) for key, attribute in fields.items()}
-    if (any(type(v) not in (int, float) or not isfinite(v) for v in values.values())
-            or values["step_c"] <= 0 or values["maximum_c"] < values["minimum_c"]
-            or not values["minimum_c"] <= values["target_temperature_c"] <= values["maximum_c"]
-            or attrs.get("hvac_action") not in ("heating", "idle", "off")):
-        return None
-    # Off retains capabilities, sensor and saved target, but is distinct from
-    # an idle thermostat in Heat. A setpoint command does not change HVAC mode.
-    # Mode wins if action readback has not caught up with a change to Off.
-    return dict(entity_id=targets[0], **values,
-                hvac_action="off" if state.state == "off" else
-                "heating" if attrs["hvac_action"] == "heating" else "idle")
+    return native_thermostat_facts(targets[0], state)
 
 
 def build_device_models(

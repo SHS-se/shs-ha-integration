@@ -196,6 +196,93 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
             return await self.physical.perform({**request, 'headroom_reserved': True})
         return native, apply
 
+    async def test_scheduled_heat_from_off_reserves_start_and_hands_back_both_native_settings(self):
+        native, apply = self.scheduled_thermostat(temperature=29, current_temperature=18, hvac_action='off')
+        native.state = 'off'
+        self.capacity.scheduled_heat_shed.return_value = True
+        self.assertTrue((await apply())['result']['heating_curtailed'])
+        self.assertFalse(self.calls)
+        self.capacity.scheduled_heat_shed.return_value = False
+        self.physical.external_ready = Mock(return_value=False)
+        denied = await apply()
+        self.assertIsNotNone(denied['error'])
+        self.assertFalse(self.calls)
+        self.physical.external_ready.assert_called_with(OWNER, entity='climate.heater', value='heat',
+                                                        require_battery_release=False)
+        self.physical.external_ready.return_value = True
+        first = await apply()
+        self.assertIsNone(first['error'])
+        self.assertNotIn('reverted_external_change', first['result'])
+        self.assertEqual(self.calls, ['set_hvac_mode', 'set_temperature'])
+        record = self.store.saved['records'][OWNER]
+        self.assertEqual((record['original_hvac_modes'], record['originals']),
+                         ({'climate.heater': 'off'}, {'climate.heater': 29}))
+
+        native.state = 'off'  # An outside change while Controlling is corrected.
+        corrected = await apply()
+        self.assertIsNone(corrected['error'])
+        self.assertEqual(corrected['result']['reverted_external_change'], {'climate.heater': 'off'})
+        self.assertEqual(self.calls[-1], 'set_hvac_mode')
+        self.assertEqual((native.state, native.attributes['temperature']), ('heat', 22))
+        await self.physical.load()
+        self.physical.external_ready.return_value = False  # No capacity to raise a live target at release.
+        result = await self.physical.perform(self.intent('release'))
+        self.assertIsNone(result['error'], result)
+        self.assertEqual([(c['service'], c['data'].get('hvac_mode')) for c in result['diagnostics']['commands']],
+                         [('set_hvac_mode', 'off'), ('set_temperature', 'off')])
+        self.assertEqual((native.state, native.attributes['temperature']), ('off', 29))
+        self.assertNotIn(OWNER, self.physical.ownership.records)
+
+    async def test_handover_supersedes_pending_target_when_old_off_target_still_reads_equal(self):
+        native, apply = self.scheduled_thermostat(temperature=29, current_temperature=18, hvac_action='idle')
+        native.state = 'off'
+        self.assertIsNone((await apply())['error'])
+        # The equipment still reads its old value while the different scheduled
+        # target remains outstanding in the capacity journal.
+        native.attributes['temperature'] = 29
+        self.physical.native_executor.capacity = SimpleNamespace(
+            requires_command=lambda entity, value: value == 29, check_command=lambda cmd: None,
+            mark_dispatch=lambda cmd: None)
+        result = await self.physical.perform(self.intent('release'))
+        self.assertIsNone(result['error'])
+        self.assertEqual([(cmd['data'], cmd['called']) for cmd in result['diagnostics']['commands']], [
+            ({'entity_id':'climate.heater', 'hvac_mode':'off'}, True),
+            ({'entity_id':'climate.heater', 'temperature':29, 'hvac_mode':'off'}, True)])
+        self.assertNotIn(OWNER, self.physical.ownership.records)
+
+    async def test_accepts_room_setpoint_when_off_thermostat_omits_hvac_action(self):
+        native, apply = self.scheduled_thermostat(temperature=25, current_temperature=18)
+        native.state = 'off'
+        self.assertNotIn('hvac_action', native.attributes)
+        self.assertIsNone((await apply())['error'])
+        self.assertEqual(self.calls, ['set_hvac_mode', 'set_temperature'])
+        self.assertEqual((native.state, native.attributes['temperature']), ('heat', 22))
+
+    async def test_activation_holds_until_native_capabilities_and_heat_readback_arrive(self):
+        native, apply = self.scheduled_thermostat(temperature=25, current_temperature=18, hvac_action='off')
+        native.state = 'off'
+        native.attributes['hvac_modes'] = ['off', 'cool']
+        self.assertEqual((await apply())['error']['kind'], 'observation')
+        self.assertFalse(self.calls)
+        native.attributes['hvac_modes'].append('heat')
+        self.hass.services.async_call = AsyncMock()
+        self.assertIsNotNone((await apply())['error'])
+        self.hass.services.async_call.assert_awaited_once()
+        self.assertEqual(self.hass.services.async_call.await_args.args[1], 'set_hvac_mode')
+        self.assertEqual(self.store.saved['records'][OWNER]['originals'], {'climate.heater': 25})
+        native.state = 'heat'
+        self.assertIsNone((await apply())['error'])
+        self.assertEqual(self.hass.services.async_call.await_args.args[1], 'set_temperature')
+
+    async def test_other_hvac_modes_and_non_room_devices_are_never_activated(self):
+        native, apply = self.scheduled_thermostat(temperature=25, current_temperature=18, hvac_action='idle')
+        native.state = 'cool'
+        self.assertIsNotNone((await apply())['error'])
+        native.state = 'off'
+        self.models[0]['category'] = 'other'
+        self.assertIsNotNone((await apply())['error'])
+        self.assertFalse(self.calls)
+
     async def test_pause_moves_only_the_setpoint_and_restores_the_accepted_target(self):
         # User requirement, 10 November 2026. Master bathroom: 21 °C left the
         # thermostat idle at 20.5 °C and 22 °C started it; Off blanks its display.

@@ -1290,12 +1290,17 @@ class ThermostatFactsTests(unittest.TestCase):
                 self.state.attributes['hvac_action'] = action
                 self.assertEqual(self.facts(), dict(entity_id='climate.bathroom',
                     minimum_c=5, maximum_c=90, step_c=1,
-                    current_temperature_c=17.4, target_temperature_c=23, hvac_action='off'))
+                    current_temperature_c=17.4, target_temperature_c=23, hvac_action='off', can_activate_heat=False))
+        self.state.attributes.pop('hvac_action')
+        self.assertEqual(self.facts()['hvac_action'], 'off')
+        for modes, expected in ((['heat', 'off'], True), (['cool', 'off'], False), (['heat'], False)):
+            self.state.attributes['hvac_modes'] = modes
+            self.assertIs(self.facts()['can_activate_heat'], expected)
 
     def test_off_does_not_invent_missing_or_invalid_facts(self):
         self.state.state = 'off'
         self.state.attributes['hvac_action'] = 'off'
-        for key in ('current_temperature', 'temperature', 'hvac_action', 'target_temp_step'):
+        for key in ('current_temperature', 'temperature', 'target_temp_step'):
             with self.subTest(key=key):
                 saved = self.state.attributes.pop(key)
                 self.assertIsNone(self.facts())
