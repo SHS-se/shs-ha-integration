@@ -730,6 +730,12 @@ temperatures. Unknown native evidence is `null`; it is never inferred from the
 selected `heat` mode. The planner uses the explicit 0.5 °C start margin and
 observed heating latch to project power from supported targets.
 
+A native thermostat in Off retains its valid capabilities, own temperature and
+saved target. Capture reports `hvac_action: "off"` for that observed mode,
+separately from `idle` in Heat. Off does not grant permission to change HVAC mode
+or imply that a numeric setpoint can deliver heat. A Heat-mode thermostat whose
+action reports `off` still has the ordinary idle latch.
+
 New native-target commands use hardware bounds in `minimum_c`/`maximum_c`; room
 comfort bounds remain in the thermal zone. Execution still rounds each requested
 target to the nearest hardware step, halves up. Acknowledged settings do not

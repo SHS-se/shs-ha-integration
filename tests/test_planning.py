@@ -1281,6 +1281,34 @@ class ThermostatFactsTests(unittest.TestCase):
         self.state.state = 'unavailable'
         self.assertIsNone(self.facts())
 
+    def test_off_retains_native_facts_without_implying_heat_mode(self):
+        # Independent synthetic thermostat observations.
+        self.state.state = 'off'
+        self.state.attributes.update(current_temperature=17.4, temperature=23)
+        for action in ('off', 'idle', 'heating'):
+            with self.subTest(action=action):
+                self.state.attributes['hvac_action'] = action
+                self.assertEqual(self.facts(), dict(entity_id='climate.bathroom',
+                    minimum_c=5, maximum_c=90, step_c=1,
+                    current_temperature_c=17.4, target_temperature_c=23, hvac_action='off'))
+
+    def test_off_does_not_invent_missing_or_invalid_facts(self):
+        self.state.state = 'off'
+        self.state.attributes['hvac_action'] = 'off'
+        for key in ('current_temperature', 'temperature', 'hvac_action', 'target_temp_step'):
+            with self.subTest(key=key):
+                saved = self.state.attributes.pop(key)
+                self.assertIsNone(self.facts())
+                self.state.attributes[key] = saved
+        self.state.attributes['current_temperature'] = float('nan')
+        self.assertIsNone(self.facts())
+
+    def test_other_modes_do_not_become_heating_thermostats(self):
+        for mode in ('cool', 'heat_cool', 'fan_only', 'dry', 'unknown', 'unavailable'):
+            with self.subTest(mode=mode):
+                self.state.state = mode
+                self.assertIsNone(self.facts())
+
     def test_number_targets_cannot_invent_their_own_sensor_or_hvac_action(self):
         self.mapping['actuator_entity_ids'] = ['number.target']
         self.assertIsNone(self.facts())

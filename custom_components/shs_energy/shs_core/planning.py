@@ -727,7 +727,7 @@ def thermostat_facts(mapping, read_state):
     if len(targets) != 1 or not targets[0].startswith("climate."):
         return None
     state = read_state(targets[0])
-    if state is None or state.state != "heat":
+    if state is None or state.state not in ("heat", "off"):
         return None
     attrs = state.attributes
     fields = dict(minimum_c="min_temp", maximum_c="max_temp", step_c="target_temp_step",
@@ -738,8 +738,12 @@ def thermostat_facts(mapping, read_state):
             or not values["minimum_c"] <= values["target_temperature_c"] <= values["maximum_c"]
             or attrs.get("hvac_action") not in ("heating", "idle", "off")):
         return None
+    # Off retains capabilities, sensor and saved target, but is distinct from
+    # an idle thermostat in Heat. A setpoint command does not change HVAC mode.
+    # Mode wins if action readback has not caught up with a change to Off.
     return dict(entity_id=targets[0], **values,
-                hvac_action="heating" if attrs["hvac_action"] == "heating" else "idle")
+                hvac_action="off" if state.state == "off" else
+                "heating" if attrs["hvac_action"] == "heating" else "idle")
 
 
 def build_device_models(
