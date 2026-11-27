@@ -346,6 +346,7 @@ def controller_explanation(device, mode, status, slot=None):
                 command = slot_command(slot, device.removeprefix('device:'))
                 kind = command.get('type')
                 if kind == 'setpoint': planned = f"The plan requests a temperature of {command['target_c']:g} °C."
+                elif kind == 'heating_schedule': planned = 'The plan requests heating now.' if command['heating'] else 'The plan requests no heating now.'
                 elif kind == 'room_relay': planned = f"The room target is {command['target_c']:g} °C."
                 elif kind == 'switch_schedule': planned = 'The plan requests this device to be on.' if command['on_seconds'] else 'The plan requests this device to be off.'
                 elif kind == 'permit_inhibit': planned = 'The plan allows this device to run.' if command['permitted'] else 'The plan requests a pause.'

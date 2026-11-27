@@ -660,6 +660,20 @@ class LiveImportTests(unittest.IsolatedAsyncioTestCase):
         self.source.capacity.setdefault('coordination', {}).setdefault('intents', {})['device:room'] = value
         self.service.authorize_device = Mock()
 
+    async def test_boolean_room_heat_participates_in_shared_live_priority(self):
+        self.scheduled_room(temperature=19.5, action='idle', measured_w=0)
+        self.source.report = self.rows.get
+        value = self.source.capacity['coordination']['intents']['device:room']
+        value['parameters']['commands']['room'] = {'type':'heating_schedule', 'heating':True}
+        candidate = self.source._heat_candidate('device:room', value, self.source.options(), self.now_ms())
+        self.assertIsNotNone(candidate)
+        candidates = self.source.heat_candidates(self.now_ms())
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]['owner'], 'device:room')
+        self.assertGreater(candidates[0]['want_w'], 0)
+        value['parameters']['commands']['room']['heating'] = False
+        self.assertEqual(self.source.heat_candidates(self.now_ms()), [])
+
     @staticmethod
     def now_ms():
         return int(datetime.now(timezone.utc).timestamp() * 1000)

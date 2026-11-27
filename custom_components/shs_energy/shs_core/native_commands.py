@@ -4,7 +4,7 @@ Execution and hypothetical verification use the same checks. Callers must resolv
 again against fresh observations at the final dispatch boundary.
 """
 from dataclasses import dataclass
-from math import isfinite
+from math import isfinite, ceil, floor
 
 from .command_journal import NativeAction, OffTemperature
 from .native_numbers import canonical_metadata, equal as numbers_equal
@@ -17,6 +17,23 @@ def finite(value):
     if not isfinite(result):
         raise ValueError('non-finite value')
     return result
+
+
+def heating_setpoint(heating, ambient_c, minimum_c, maximum_c, step_c):
+    """The controller, not a forecast, chooses the native full-heat setting.
+
+    Cross the 1 C heating-call margin strictly on the native grid. Never clamp
+    an unexpressible request and pretend it will deliver the scheduled heat.
+    """
+    ambient, low, high, step = map(finite, (ambient_c, minimum_c, maximum_c, step_c))
+    if type(heating) is not bool or step <= 0 or high < low:
+        raise ValueError('Invalid interval heating capability')
+    boundary = ambient + (1 if heating else -1)
+    index = floor((boundary - low) / step + 1e-9) + 1 if heating else ceil((boundary - low) / step - 1e-9) - 1
+    target = round(low + index * step, 9)
+    if not low <= target <= high:
+        raise ValueError('Native thermostat limits cannot express the scheduled heating state')
+    return target
 
 
 def supports_heat_activation(attributes):

@@ -17,6 +17,9 @@ def validate_commands(commands, models):
         kind = command.get('type')
         if kind == 'unavailable':
             valid = set(command) == {'type', 'reason'} and isinstance(command['reason'], str) and bool(command['reason'])
+        elif kind == 'heating_schedule':
+            valid = (kinds[key] in ('setpoint', 'heating_schedule')
+                and set(command) == {'type', 'heating'} and type(command.get('heating')) is bool)
         elif kind == 'room_relay':
             valid = (kinds[key] in ('switch_schedule', 'room_relay')
                 and set(command) == {'type', 'room_key', 'target_c'}

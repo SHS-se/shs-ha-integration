@@ -196,6 +196,71 @@ class HeatingOverridesTests(IsolatedAsyncioTestCase):
             return await self.physical.perform({**request, 'headroom_reserved': True})
         return native, apply
 
+    async def test_interval_heat_targets_follow_live_ambient_and_not_a_planner_temperature(self):
+        self.models[0]['load_type'] = 'duty_cycle'
+        native = self.states['climate.heater']
+        native.attributes.update(current_temperature=19.5, target_temp_step=.5)
+        slot = dict(start=datetime.now(timezone.utc).isoformat(),
+                    device_commands={'heater': {'type':'heating_schedule', 'heating':True}})
+        async def apply():
+            request = device_intent(OWNER, 'apply', self.plan, slot, configuration_revision=1, policy_revision=1)
+            return await self.physical.perform({**request, 'headroom_reserved':True})
+        self.assertIsNone((await apply())['error'])
+        self.assertEqual(native.attributes['temperature'], 21)
+        native.attributes['current_temperature'] = 22
+        self.assertIsNone((await apply())['error'])
+        self.assertEqual(native.attributes['temperature'], 23.5)
+        slot['device_commands']['heater']['heating'] = False
+        self.assertIsNone((await apply())['error'])
+        self.assertEqual(native.attributes['temperature'], 20.5)
+        self.assertEqual(native.state, 'heat')
+        calls = list(self.calls)
+        native.attributes['current_temperature'] = None
+        self.assertEqual((await apply())['error']['kind'], 'observation')
+        self.assertEqual(self.calls, calls)
+        self.assertEqual(native.attributes['temperature'], 20.5)
+        native.attributes['current_temperature'] = 'unknown'
+        self.assertEqual((await apply())['error']['kind'], 'observation')
+        self.assertEqual(self.calls, calls)
+        native.attributes['current_temperature'] = 34
+        slot['device_commands']['heater']['heating'] = True
+        self.assertEqual((await apply())['error']['kind'], 'plan')
+        self.assertEqual(self.calls, calls)
+
+    async def test_full_quarter_relay_reports_live_import_curtailment_and_resumes(self):
+        self.options['device_control_mappings']['heater'].update(control_type='switch_schedule',
+            actuator_entity_ids=['switch.heater'])
+        self.models[0].update(control_type='switch_schedule',load_type='fixed_full_load')
+        slot = dict(start=datetime.now(timezone.utc).isoformat(),
+                    device_commands={'heater':{'type':'switch_schedule','on_seconds':900}})
+        async def write(domain, service, data, blocking):
+            self.calls.append(service)
+            self.states[data['entity_id']].state = service.removeprefix('turn_')
+        self.hass.services.async_call = write
+        async def apply():
+            request = device_intent(OWNER, 'apply', self.plan, slot, configuration_revision=1, policy_revision=1)
+            return await self.physical.perform({**request,'headroom_reserved':True})
+        self.capacity.scheduled_heat_shed.return_value = True
+        limited = await apply()
+        self.assertIsNone(limited['error'])
+        self.assertEqual(limited['result']['state'], 'limited')
+        self.assertTrue(limited['result']['heating_curtailed'])
+        self.assertEqual(self.states['switch.heater'].state, 'off')
+        self.capacity.scheduled_heat_shed.return_value = False
+        self.assertIsNone((await apply())['error'])
+        self.assertEqual(self.states['switch.heater'].state, 'on')
+
+    async def test_interval_heating_off_never_activates_an_off_thermostat(self):
+        self.models[0]['load_type'] = 'fixed_full_load'
+        native = self.states['climate.heater']; native.state = 'off'
+        native.attributes.update(current_temperature=20, target_temp_step=1)
+        slot = dict(start=datetime.now(timezone.utc).isoformat(),
+                    device_commands={'heater': {'type':'heating_schedule', 'heating':False}})
+        request = device_intent(OWNER, 'apply', self.plan, slot, configuration_revision=1, policy_revision=1)
+        self.assertIsNone((await self.physical.perform({**request,'headroom_reserved':True}))['error'])
+        self.assertFalse(self.calls)
+        self.assertEqual(native.state, 'off')
+
     async def test_scheduled_heat_from_off_reserves_start_and_hands_back_both_native_settings(self):
         native, apply = self.scheduled_thermostat(temperature=29, current_temperature=18, hvac_action='off')
         native.state = 'off'

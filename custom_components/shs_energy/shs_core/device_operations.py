@@ -11,7 +11,7 @@ from time import perf_counter
 from uuid import uuid4
 
 from .command_journal import Command
-from .native_commands import finite, native_command, native_thermostat_facts
+from .native_commands import finite, native_command, native_thermostat_facts, heating_setpoint
 from .native_numbers import floor_native
 from .grid_capacity import EV_WATTS_PER_AMP, GridCapacityConfigurationError
 from .device_ownership import DeviceOwnership
@@ -1020,6 +1020,42 @@ class DeviceOperations:
             return {"state": "unsupported", "reason": self.holding(device, command["reason"]),
                     "execution_available_entities": available}
         kind = mapping["control_type"]
+        errors = execution_setup_errors(mapping)
+        if errors:
+            raise ValueError("; ".join(errors))
+        interval_heat = command["type"] == "heating_schedule"
+        heat_requested = command.get("heating") if interval_heat else None
+        if interval_heat:
+            model = next(m for m in models if m["key"] == key)
+            if kind != "setpoint" or model.get("category") != "heating" or model.get("load_type") not in ("fixed_full_load", "duty_cycle", "inverter"):
+                raise ControlPlanError("Interval heating requires a reviewed room Setpoint control")
+            values = []
+            for entity in actuator_targets(mapping):
+                state = self.actuator_state(entity)
+                attrs = state.attributes
+                if entity.startswith("climate."):
+                    ambient = attrs.get("current_temperature")
+                    low, high, step = attrs.get("min_temp"), attrs.get("max_temp"), attrs.get("target_temp_step")
+                    if state.state == "off" and not heat_requested:
+                        return {"state": "commanded", "reason": "The scheduled thermostat is already Off",
+                                "decision": {"kind": "setpoint", "heating": False}}
+                else:
+                    sensor = mapping["temperature_entity_id"]
+                    observed = self.state(sensor)
+                    ambient = room_temperature(sensor, observed.state, observed.attributes, self.inputs.temperature_unit())
+                    low, high, step = attrs.get("min"), attrs.get("max"), attrs.get("step")
+                try:
+                    ambient = finite(ambient)
+                except (TypeError, ValueError) as error:
+                    raise ControlObservationError("Live ambient temperature is unavailable", entity,
+                        "Check the thermostat's current temperature; its settings are retained.") from error
+                try:
+                    values.append(heating_setpoint(heat_requested, ambient, low, high, step))
+                except (TypeError, ValueError) as error:
+                    raise ControlPlanError(str(error)) from error
+            if len(values) != 1:
+                raise ControlPlanError("Interval heating requires exactly one native control")
+            command = {"type": "setpoint", "target_c": values[0]}
         room_relay = command["type"] == "room_relay"
         if room_relay:
             if (kind != "switch_schedule" or command["room_key"] != mapping.get("room_area_id")
@@ -1028,9 +1064,6 @@ class DeviceOperations:
                 raise ControlPlanError("The planned room no longer matches the heater's reviewed room and sensor")
         elif command["type"] != kind:
             raise ValueError("the website command does not match the reviewed local method")
-        errors = execution_setup_errors(mapping)
-        if errors:
-            raise ValueError("; ".join(errors))
         targets = actuator_targets(mapping)
         # Every enabled owner reserves its targets, even before it captures a
         # baseline. This refuses both sides of an overlap before either writes.
@@ -1114,7 +1147,7 @@ class DeviceOperations:
                         raise ValueError("temperature control must use Celsius")
                     step, origin = finite(state.attributes.get("step", 1)), finite(state.attributes["min"])
                 values[entity] = rounded_setpoint(command["target_c"], origin, step)
-            if "room_target_c" in command and self.shed_scheduled_heat(targets[0], self.actuator_state(targets[0])):
+            if ("room_target_c" in command or interval_heat and heat_requested) and self.shed_scheduled_heat(targets[0], self.actuator_state(targets[0])):
                 await self.pause_thermostat(device, options, targets[0], accepted=values[targets[0]])
                 return self.scheduled_heat_limited()
         else:
@@ -1134,6 +1167,10 @@ class DeviceOperations:
                     return self.scheduled_heat_limited()
             else:
                 on = command["permitted"] if kind == "permit_inhibit" else command["on_seconds"] == 900
+                if on and model.get("category") == "heating" and self.shed_scheduled_heat(targets[0], self.actuator_state(targets[0])):
+                    await self.capture(device, options, targets)
+                    await self.command(targets[0], 'off')
+                    return self.scheduled_heat_limited()
             if water:
                 on = self.heating_permission_for(mapping,commanded,command["permitted"],demand)
             values = {entity: "on" if on else "off" for entity in targets}
@@ -1152,7 +1189,8 @@ class DeviceOperations:
         record.pop('heating_pause', None)
         await self.save()
         if kind == "setpoint":
-            decision = {"kind": kind, "target_c": sorted(set(values.values()))}
+            decision = {"kind": kind, "target_c": sorted(set(values.values())),
+                        **({"heating": heat_requested} if interval_heat else {})}
         elif kind == "switch_schedule":
             decision = {"kind": kind, "on": on}
         else:

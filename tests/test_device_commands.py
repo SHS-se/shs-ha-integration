@@ -300,3 +300,19 @@ class DeviceExecutionTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_tick()
         self.assertFalse(self.controller.ownership.records)
         self.assertEqual(self.states['switch.heater'].state, 'on')
+
+
+class IntervalSetpointTests(unittest.TestCase):
+    def test_native_heat_request_is_supported_and_never_silently_clamped(self):
+        from shs_core.native_commands import heating_setpoint
+        self.assertEqual(heating_setpoint(True, 20, 5, 35, 1), 22)
+        self.assertEqual(heating_setpoint(False, 20, 5, 35, 1), 18)
+        for on, ambient in [(True, 34), (False, 5)]:
+            with self.assertRaises(ValueError):
+                heating_setpoint(on, ambient, 5, 35, 1)
+        for on in [True, False]:
+            validate_commands({'heater':{'type':'heating_schedule','heating':on}},
+                              [{'key':'heater','control_type':'setpoint'}])
+        with self.assertRaises(ValueError):
+            validate_commands({'heater':{'type':'heating_schedule','heating':.5}},
+                              [{'key':'heater','control_type':'setpoint'}])

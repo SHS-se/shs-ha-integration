@@ -1224,8 +1224,14 @@ class HomeAssistantSource:
         if not start <= now_ms < start + run_priority.QUARTER_MS or device_mode(options, owner) != 'controlling':
             return None
         command = parameters['commands'][key]
-        thermostat = command['type'] == 'setpoint' and 'room_target_c' in command
-        if not thermostat and command['type'] != 'room_relay':
+        model = next((m for m in parameters['models'] if m['key'] == key), {})
+        interval_heat = command['type'] == 'heating_schedule'
+        scheduled_switch = command['type'] == 'switch_schedule' and model.get('category') == 'heating'
+        thermostat = interval_heat or command['type'] == 'setpoint' and 'room_target_c' in command
+        if not thermostat and not scheduled_switch and command['type'] != 'room_relay':
+            return None
+        requested = command['heating'] if interval_heat else command['on_seconds'] == 900 if scheduled_switch else None
+        if requested is False:
             return None
         mapping = options['device_control_mappings'][key]
         if key in options.get('excluded_device_readings', ()):
@@ -1253,14 +1259,14 @@ class HomeAssistantSource:
             temperature = finite(attrs['current_temperature'])
             running = attrs.get('hvac_action') == 'heating'
             pause = record.get('heating_pause')
-            waiting = bool(pause) and pause.get('entity') == entity and temperature < finite(pause['target_c'])
+            waiting = bool(requested) or bool(pause) and pause.get('entity') == entity and temperature < finite(pause['target_c'])
         else:
             room = mapping['temperature_entity_id']
             observed = self.report(room)
             temperature = room_temperature(room, observed['state'], observed['attributes'],
                                            self.hass.config.units.temperature_unit)
             running = native['state'] == 'on'
-            waiting = not running and relay_heat(temperature, command['target_c'], native['state']) == 'on'
+            waiting = not running and (requested if scheduled_switch else relay_heat(temperature, command['target_c'], native['state']) == 'on')
         if not running and not waiting:
             return None  # An idle heater only contributes its measured draw.
         want = draw if running and draw > 0 else self.mapped_power_bound(mapping)

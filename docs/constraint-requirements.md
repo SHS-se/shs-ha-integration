@@ -208,3 +208,15 @@ Ordered location receipts and their derived clock commit together, shared by
 all planning backends. Missing readings never imply away or a fresh arrival:
 planning continues with an explicitly estimated mature readiness target until
 observations can repair it. Removing the setting returns to cable readiness.
+
+User requirement, 27 November 2026: room planning supplies only when to heat and
+when not to heat, in whole quarters. Native Setpoint equipment receives
+`heating_schedule` with a Boolean `heating` field, never a planner-selected
+numeric target. The controller resolves that state from live ambient temperature
+and the supported native setting grid, strictly crossing a 1 C call margin in
+the requested direction. Unexpressible settings or missing ambient hold settings
+and report the device; they do not fabricate a successful heat request. The
+existing Heat activation, shared import priority, verification and explicit
+handover contracts still apply. Fixed-full-load and duty-cycle room heaters are
+planned at full measured operating power while heating; only inverter ON draw
+may vary with its measured model.

@@ -9,7 +9,7 @@ def compact_device_intent(intent):
     if 'models' in parameters:
         # Other models still participate in pool/EV routing and actuator
         # overlap checks. An explicit mapping takes precedence over local options.
-        fields = ('key', 'category', 'control_type', 'mapping')
+        fields = ('key', 'category', 'control_type', 'load_type', 'mapping')
         parameters['models'] = [{field: model[field] for field in fields if field in model}
                                 for model in parameters['models']]
     if 'commands' in parameters and intent['device'].startswith('device:'):
